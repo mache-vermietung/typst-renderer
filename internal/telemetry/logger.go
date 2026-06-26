@@ -1,3 +1,4 @@
+// Package telemetry ...
 package telemetry
 
 import (

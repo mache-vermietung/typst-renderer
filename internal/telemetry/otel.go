@@ -11,6 +11,7 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
 
+// InitTracer ...
 func InitTracer(ctx context.Context) (*sdktrace.TracerProvider, error) {
 	// 1. Der Exporter liest automatisch OTEL_EXPORTER_OTLP_ENDPOINT etc
 	exporter, err := otlptracehttp.New(ctx)
