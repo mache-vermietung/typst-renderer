@@ -37,7 +37,7 @@ func (h *TraceContextHandler) Handle(ctx context.Context, r slog.Record) error {
 }
 
 // InitLogger initializes slog as the default logger using structured output and trace correlation.
-func InitLogger() {
+func InitLogger() *slog.Logger {
 	level := slog.LevelInfo
 
 	if lvlStr := os.Getenv("LOG_LEVEL"); lvlStr != "" {
@@ -60,4 +60,6 @@ func InitLogger() {
 	handler := NewTraceContextHandler(baseHandler)
 	logger := slog.New(handler)
 	slog.SetDefault(logger)
+
+	return logger
 }
