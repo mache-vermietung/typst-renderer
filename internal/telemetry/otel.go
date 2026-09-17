@@ -11,8 +11,14 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
 
-// InitTracer ...
+// InitTracer initializes tracing for the "domio-api" service.
 func InitTracer(ctx context.Context) (*sdktrace.TracerProvider, error) {
+	return InitTracerForService(ctx, "domio-api")
+}
+
+// InitTracerForService initializes tracing for the given service name, so that
+// additional binaries (e.g. cmd/portal-bff) show up distinctly in traces.
+func InitTracerForService(ctx context.Context, serviceName string) (*sdktrace.TracerProvider, error) {
 	// 1. Der Exporter liest automatisch OTEL_EXPORTER_OTLP_ENDPOINT etc
 	exporter, err := otlptracehttp.New(ctx)
 	if err != nil {
@@ -23,7 +29,7 @@ func InitTracer(ctx context.Context) (*sdktrace.TracerProvider, error) {
 	res, err := resource.New(ctx,
 		resource.WithFromEnv(), // Liest Umgebungsvariablen
 		resource.WithAttributes(
-			semconv.ServiceNameKey.String("domio-api"),
+			semconv.ServiceNameKey.String(serviceName),
 			semconv.ServiceVersionKey.String("0.1.0"),
 		),
 	)
