@@ -36,7 +36,6 @@ func TestGRPCServer_HealthCheck(t *testing.T) {
 		_ = conn.Close()
 	}()
 
-
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
