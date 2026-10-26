@@ -7,10 +7,11 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tobima/domio/internal/infrastructure/grpcserver"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/health/grpc_health_v1"
+
+	"github.com/tobima/domio/internal/infrastructure/grpcserver"
 )
 
 func TestGRPCServer_HealthCheck(t *testing.T) {

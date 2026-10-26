@@ -6,11 +6,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tobima/domio/internal/infrastructure/grpcserver"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
+
+	"github.com/tobima/domio/internal/infrastructure/grpcserver"
 )
 
 func ctxWithPeer(ip string) context.Context {
