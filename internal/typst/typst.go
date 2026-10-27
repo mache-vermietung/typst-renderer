@@ -18,11 +18,18 @@ const (
 	DefaultCompileTimeout = 20 * time.Second
 	// DefaultBinaryName is the default binary name on PATH.
 	DefaultBinaryName = "typst"
+	// unreachableProxy is set as HTTP(S) proxy for the typst process so that it cannot
+	// download packages that are not vendored.
+	unreachableProxy = "http://127.0.0.1:9"
+	// processWaitDelay bounds how long Wait blocks for I/O after the process was killed.
+	processWaitDelay = 2 * time.Second
 )
 
 var (
 	// ErrCompileFailed indicates that typst compilation failed.
 	ErrCompileFailed = errors.New("typst compile failed")
+	// ErrCompileTimeout indicates that typst compilation exceeded its timeout.
+	ErrCompileTimeout = errors.New("typst compile timed out")
 	// ErrBinaryNotFound indicates that the typst binary was not found or is not executable.
 	ErrBinaryNotFound = errors.New("typst binary not found")
 	// ErrInvalidInput indicates that input parameters or file paths are invalid.
@@ -63,34 +70,34 @@ func CheckBinary(ctx context.Context, binaryPath string) (string, error) {
 // Compile compiles a template bundle to PDF using the Typst CLI.
 // It writes files to a temporary directory, sets the sandbox root to that directory,
 // executes Typst with minimal environment variables, and removes all temporary files.
+// Packages are resolved only from opts.PackagePath: the package cache is an empty
+// per-call directory and all HTTP(S) traffic goes to an unreachable proxy, so imports
+// of packages that are not vendored fail instead of being downloaded.
 func Compile(ctx context.Context, opts CompileOptions, input Input) ([]byte, error) {
-	if input.Entrypoint == "" {
-		return nil, fmt.Errorf("%w: entrypoint is required", ErrInvalidInput)
+	if err := validateInput(input); err != nil {
+		return nil, err
 	}
 
-	if input.Files == nil {
-		return nil, fmt.Errorf("%w: files map is required", ErrInvalidInput)
-	}
-
-	if _, ok := input.Files[input.Entrypoint]; !ok {
-		return nil, fmt.Errorf("%w: entrypoint %q not found in files", ErrInvalidInput, input.Entrypoint)
-	}
-
-	tmpDir, err := os.MkdirTemp("", "domio-typst-*")
+	workDir, err := os.MkdirTemp("", "domio-typst-*")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create temp directory: %w", err)
 	}
 
 	defer func() {
-		_ = os.RemoveAll(tmpDir)
+		_ = os.RemoveAll(workDir)
 	}()
 
-	if err := writeBundleFiles(tmpDir, input); err != nil {
+	rootDir, cacheDir, err := createWorkDirs(workDir)
+	if err != nil {
 		return nil, err
 	}
 
-	outPDF := filepath.Join(tmpDir, "out.pdf")
-	args := buildCompileArgs(tmpDir, input.Entrypoint, outPDF, opts)
+	if err := writeBundleFiles(rootDir, input); err != nil {
+		return nil, err
+	}
+
+	outPDF := filepath.Join(workDir, "out.pdf")
+	args := buildCompileArgs(rootDir, cacheDir, input.Entrypoint, outPDF, opts)
 
 	binary := opts.BinaryPath
 	if binary == "" {
@@ -108,6 +115,36 @@ func Compile(ctx context.Context, opts CompileOptions, input Input) ([]byte, err
 	}
 
 	return pdfBytes, nil
+}
+
+func validateInput(input Input) error {
+	if input.Entrypoint == "" {
+		return fmt.Errorf("%w: entrypoint is required", ErrInvalidInput)
+	}
+
+	if input.Files == nil {
+		return fmt.Errorf("%w: files map is required", ErrInvalidInput)
+	}
+
+	if _, ok := input.Files[input.Entrypoint]; !ok {
+		return fmt.Errorf("%w: entrypoint %q not found in files", ErrInvalidInput, input.Entrypoint)
+	}
+
+	return nil
+}
+
+// createWorkDirs creates the sandbox root and the (always empty) package cache below workDir.
+func createWorkDirs(workDir string) (rootDir, cacheDir string, err error) {
+	rootDir = filepath.Join(workDir, "root")
+	cacheDir = filepath.Join(workDir, "cache")
+
+	for _, dir := range []string{rootDir, cacheDir} {
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			return "", "", fmt.Errorf("failed to create directory %q: %w", dir, err)
+		}
+	}
+
+	return rootDir, cacheDir, nil
 }
 
 func writeBundleFiles(tmpDir string, input Input) error {
@@ -151,8 +188,8 @@ func writeSingleFile(tmpDir, relPath string, content []byte) error {
 	return nil
 }
 
-func buildCompileArgs(tmpDir, entrypoint, outPDF string, opts CompileOptions) []string {
-	args := []string{"compile", "--root", tmpDir}
+func buildCompileArgs(rootDir, cacheDir, entrypoint, outPDF string, opts CompileOptions) []string {
+	args := []string{"compile", "--root", rootDir, "--package-cache-path", cacheDir}
 
 	if opts.PackagePath != "" {
 		absPkgPath, err := filepath.Abs(opts.PackagePath)
@@ -174,7 +211,7 @@ func buildCompileArgs(tmpDir, entrypoint, outPDF string, opts CompileOptions) []
 		}
 	}
 
-	args = append(args, filepath.Join(tmpDir, filepath.Clean(entrypoint)), outPDF)
+	args = append(args, filepath.Join(rootDir, filepath.Clean(entrypoint)), outPDF)
 
 	return args
 }
@@ -190,11 +227,8 @@ func runTypstCommand(ctx context.Context, binary string, args []string, timeout 
 	// #nosec G204 -- binary name and arguments are strictly controlled by the compiler options and temp sandbox
 	cmd := exec.CommandContext(cmdCtx, binary, args...)
 
-	if envPath := os.Getenv("PATH"); envPath != "" {
-		cmd.Env = []string{"PATH=" + envPath}
-	} else {
-		cmd.Env = []string{"PATH=/usr/local/bin:/usr/bin:/bin"}
-	}
+	cmd.Env = processEnv()
+	cmd.WaitDelay = processWaitDelay
 
 	var stderr bytes.Buffer
 
@@ -202,7 +236,7 @@ func runTypstCommand(ctx context.Context, binary string, args []string, timeout 
 
 	if err := cmd.Run(); err != nil {
 		if errors.Is(cmdCtx.Err(), context.DeadlineExceeded) {
-			return fmt.Errorf("%w: compilation timed out: %w", ErrCompileFailed, cmdCtx.Err())
+			return fmt.Errorf("%w: %w", ErrCompileTimeout, cmdCtx.Err())
 		}
 
 		if errors.Is(err, exec.ErrNotFound) {
@@ -218,4 +252,21 @@ func runTypstCommand(ctx context.Context, binary string, args []string, timeout 
 	}
 
 	return nil
+}
+
+// processEnv returns the minimal environment for the typst process. Only PATH is passed
+// through; the proxy variables point to an unreachable address to block package downloads.
+func processEnv() []string {
+	path := os.Getenv("PATH")
+	if path == "" {
+		path = "/usr/local/bin:/usr/bin:/bin"
+	}
+
+	return []string{
+		"PATH=" + path,
+		"HTTPS_PROXY=" + unreachableProxy,
+		"HTTP_PROXY=" + unreachableProxy,
+		"https_proxy=" + unreachableProxy,
+		"http_proxy=" + unreachableProxy,
+	}
 }

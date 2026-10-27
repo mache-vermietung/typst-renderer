@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -100,10 +101,11 @@ func TestCompile_NonVendoredPackageFails(t *testing.T) {
 
 	pkgPath := filepath.Join("..", "..", "document", "packages")
 
+	// tablex exists in the public registry; the import must fail because downloads are blocked.
 	input := typst.Input{
 		Entrypoint: "main.typ",
 		Files: map[string][]byte{
-			"main.typ": []byte(`#import "@preview/nonexistent:1.0.0": *
+			"main.typ": []byte(`#import "@preview/tablex:0.0.9": tablex
 Hello
 `),
 		},
@@ -121,6 +123,10 @@ Hello
 
 	if !errors.Is(err, typst.ErrCompileFailed) {
 		t.Errorf("expected ErrCompileFailed, got %v", err)
+	}
+
+	if !strings.Contains(err.Error(), "failed to download package") {
+		t.Errorf("expected blocked package download, got %v", err)
 	}
 }
 
@@ -223,7 +229,57 @@ func TestCompile_TimeoutHandling(t *testing.T) {
 	}
 
 	_, err := typst.Compile(ctx, typst.CompileOptions{}, input)
-	if !errors.Is(err, typst.ErrCompileFailed) {
-		t.Errorf("expected ErrCompileFailed on timeout, got: %v", err)
+	if !errors.Is(err, typst.ErrCompileTimeout) {
+		t.Errorf("expected ErrCompileTimeout on timeout, got: %v", err)
+	}
+}
+
+func TestCompile_LongRunningProcessIsKilled(t *testing.T) {
+	ctx := context.Background()
+
+	input := typst.Input{
+		Entrypoint: "main.typ",
+		Files: map[string][]byte{
+			"main.typ": []byte(`#let x = 0
+#for i in range(1000000000) { x += 1 }
+#x
+`),
+		},
+	}
+
+	start := time.Now()
+
+	_, err := typst.Compile(ctx, typst.CompileOptions{Timeout: 500 * time.Millisecond}, input)
+	if !errors.Is(err, typst.ErrCompileTimeout) {
+		t.Fatalf("expected ErrCompileTimeout, got: %v", err)
+	}
+
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("expected compile to be aborted shortly after the timeout, took %s", elapsed)
+	}
+}
+
+func TestCompile_RemovesTemporaryDirectory(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+
+	input := typst.Input{
+		Entrypoint: "main.typ",
+		Files: map[string][]byte{
+			"main.typ": []byte(`#let x = { incomplete`),
+		},
+	}
+
+	if _, err := typst.Compile(context.Background(), typst.CompileOptions{}, input); err == nil {
+		t.Fatalf("expected compile error")
+	}
+
+	entries, err := os.ReadDir(tmp)
+	if err != nil {
+		t.Fatalf("failed to read temp dir: %v", err)
+	}
+
+	if len(entries) != 0 {
+		t.Errorf("expected temporary directory to be removed, found %d entries", len(entries))
 	}
 }
