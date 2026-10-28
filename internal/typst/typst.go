@@ -24,6 +24,12 @@ const (
 	unreachableProxy = "http://127.0.0.1:9"
 	// processWaitDelay bounds how long Wait blocks for I/O after the process was killed.
 	processWaitDelay = 2 * time.Second
+	// DefaultMaxOutputBytes is the default size limit of the generated PDF/PNG or query output.
+	DefaultMaxOutputBytes int64 = 64 << 20
+	// maxDiagnosticBytes bounds the stderr diagnostics kept for error messages.
+	maxDiagnosticBytes int64 = 64 << 10
+	// dataFileName is the file below the sandbox root that receives Input.DataJSON.
+	dataFileName = "data.json"
 )
 
 var (
@@ -35,6 +41,8 @@ var (
 	ErrBinaryNotFound = errors.New("typst binary not found")
 	// ErrInvalidInput indicates that input parameters or file paths are invalid.
 	ErrInvalidInput = errors.New("invalid typst input")
+	// ErrOutputTooLarge indicates that the generated output exceeds CompileOptions.MaxOutputBytes.
+	ErrOutputTooLarge = errors.New("typst output too large")
 )
 
 // CompileOptions configures the typst compiler execution.
@@ -43,6 +51,8 @@ type CompileOptions struct {
 	PackagePath string
 	FontPath    string
 	Timeout     time.Duration
+	// MaxOutputBytes limits the generated output; 0 means DefaultMaxOutputBytes.
+	MaxOutputBytes int64
 }
 
 // Input represents the template bundle and data to compile.
@@ -75,6 +85,60 @@ func CheckBinary(ctx context.Context, binaryPath string) (string, error) {
 // per-call directory and all HTTP(S) traffic goes to an unreachable proxy, so imports
 // of packages that are not vendored fail instead of being downloaded.
 func Compile(ctx context.Context, opts CompileOptions, input Input) ([]byte, error) {
+	return runInSandbox(ctx, opts, input, func(s sandbox) ([]string, string) {
+		outPDF := filepath.Join(s.workDir, "out.pdf")
+
+		return append(s.baseArgs("compile"), s.entrypoint, outPDF), outPDF
+	})
+}
+
+// CompilePNG compiles a specific 1-based page of a template bundle to a PNG image.
+func CompilePNG(ctx context.Context, opts CompileOptions, input Input, page int) ([]byte, error) {
+	if page < 1 {
+		return nil, fmt.Errorf("%w: page must be >= 1", ErrInvalidInput)
+	}
+
+	return runInSandbox(ctx, opts, input, func(s sandbox) ([]string, string) {
+		outTemplate := filepath.Join(s.workDir, "out-{p}.png")
+		args := append(s.baseArgs("compile"), "--format", "png", "--pages", strconv.Itoa(page), s.entrypoint, outTemplate)
+
+		return args, filepath.Join(s.workDir, fmt.Sprintf("out-%d.png", page))
+	})
+}
+
+// Query runs typst query on a template bundle and returns the matching elements in JSON format.
+func Query(ctx context.Context, opts CompileOptions, input Input, selector string) ([]byte, error) {
+	if selector == "" {
+		return nil, fmt.Errorf("%w: selector is required", ErrInvalidInput)
+	}
+
+	return runInSandbox(ctx, opts, input, func(s sandbox) ([]string, string) {
+		return append(s.baseArgs("query"), s.entrypoint, selector, "--field", "value"), ""
+	})
+}
+
+// sandbox describes the isolated per-call working directory of a typst invocation.
+type sandbox struct {
+	workDir    string
+	rootDir    string
+	cacheDir   string
+	entrypoint string
+	opts       CompileOptions
+}
+
+func (s sandbox) baseArgs(subcommand string) []string {
+	return buildBaseArgs(subcommand, s.rootDir, s.cacheDir, s.opts)
+}
+
+// runInSandbox validates the input, writes the bundle into a fresh temporary sandbox, runs typst
+// with the arguments returned by buildArgs and removes the sandbox afterwards. The result is the
+// content of outputFile, or typst's stdout if outputFile is empty; both are size-limited.
+func runInSandbox(
+	ctx context.Context,
+	opts CompileOptions,
+	input Input,
+	buildArgs func(s sandbox) (args []string, outputFile string),
+) ([]byte, error) {
 	if err := validateInput(input); err != nil {
 		return nil, err
 	}
@@ -97,115 +161,50 @@ func Compile(ctx context.Context, opts CompileOptions, input Input) ([]byte, err
 		return nil, err
 	}
 
-	outPDF := filepath.Join(workDir, "out.pdf")
-	args := buildCompileArgs(rootDir, cacheDir, input.Entrypoint, outPDF, opts)
+	args, outputFile := buildArgs(sandbox{
+		workDir:    workDir,
+		rootDir:    rootDir,
+		cacheDir:   cacheDir,
+		entrypoint: filepath.Join(rootDir, filepath.Clean(input.Entrypoint)),
+		opts:       opts,
+	})
 
 	binary := opts.BinaryPath
 	if binary == "" {
 		binary = DefaultBinaryName
 	}
 
-	if err := runTypstCommand(ctx, binary, args, opts.Timeout); err != nil {
-		return nil, err
+	maxOutput := opts.MaxOutputBytes
+	if maxOutput <= 0 {
+		maxOutput = DefaultMaxOutputBytes
 	}
 
-	// #nosec G304 -- outPDF is located in the freshly created isolated temporary directory
-	pdfBytes, err := os.ReadFile(outPDF)
-	if err != nil {
-		return nil, fmt.Errorf("%w: failed to read generated PDF: %w", ErrCompileFailed, err)
+	stdout, err := runTypstCommand(ctx, binary, args, opts.Timeout, maxOutput)
+	if err != nil || outputFile == "" {
+		return stdout, err
 	}
 
-	return pdfBytes, nil
+	return readOutputFile(outputFile, maxOutput)
 }
 
-// CompilePNG compiles a specific 1-based page of a template bundle to a PNG image.
-func CompilePNG(ctx context.Context, opts CompileOptions, input Input, page int) ([]byte, error) {
-	if err := validateInput(input); err != nil {
-		return nil, err
-	}
-
-	if page < 1 {
-		return nil, fmt.Errorf("%w: page must be >= 1", ErrInvalidInput)
-	}
-
-	workDir, err := os.MkdirTemp("", "domio-typst-png-*")
+// readOutputFile reads the generated file, rejecting files above maxBytes.
+func readOutputFile(path string, maxBytes int64) ([]byte, error) {
+	info, err := os.Stat(path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create temp directory: %w", err)
+		return nil, fmt.Errorf("%w: failed to read generated output: %w", ErrCompileFailed, err)
 	}
 
-	defer func() {
-		_ = os.RemoveAll(workDir)
-	}()
+	if info.Size() > maxBytes {
+		return nil, fmt.Errorf("%w: %d bytes (limit %d)", ErrOutputTooLarge, info.Size(), maxBytes)
+	}
 
-	rootDir, cacheDir, err := createWorkDirs(workDir)
+	// #nosec G304 -- path is located in the freshly created isolated temporary directory
+	content, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: failed to read generated output: %w", ErrCompileFailed, err)
 	}
 
-	if err := writeBundleFiles(rootDir, input); err != nil {
-		return nil, err
-	}
-
-	outTemplate := filepath.Join(workDir, "out-{p}.png")
-	args := buildBaseArgs("compile", rootDir, cacheDir, opts)
-	args = append(args, "--format", "png", "--pages", strconv.Itoa(page), filepath.Join(rootDir, filepath.Clean(input.Entrypoint)), outTemplate)
-
-	binary := opts.BinaryPath
-	if binary == "" {
-		binary = DefaultBinaryName
-	}
-
-	if err := runTypstCommand(ctx, binary, args, opts.Timeout); err != nil {
-		return nil, err
-	}
-
-	outPNG := filepath.Join(workDir, fmt.Sprintf("out-%d.png", page))
-	// #nosec G304 -- outPNG is located in the freshly created isolated temporary directory
-	pngBytes, err := os.ReadFile(outPNG)
-	if err != nil {
-		return nil, fmt.Errorf("%w: failed to read generated PNG: %w", ErrCompileFailed, err)
-	}
-
-	return pngBytes, nil
-}
-
-// Query runs typst query on a template bundle and returns the matching elements in JSON format.
-func Query(ctx context.Context, opts CompileOptions, input Input, selector string) ([]byte, error) {
-	if err := validateInput(input); err != nil {
-		return nil, err
-	}
-
-	if selector == "" {
-		return nil, fmt.Errorf("%w: selector is required", ErrInvalidInput)
-	}
-
-	workDir, err := os.MkdirTemp("", "domio-typst-query-*")
-	if err != nil {
-		return nil, fmt.Errorf("failed to create temp directory: %w", err)
-	}
-
-	defer func() {
-		_ = os.RemoveAll(workDir)
-	}()
-
-	rootDir, cacheDir, err := createWorkDirs(workDir)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := writeBundleFiles(rootDir, input); err != nil {
-		return nil, err
-	}
-
-	args := buildBaseArgs("query", rootDir, cacheDir, opts)
-	args = append(args, filepath.Join(rootDir, filepath.Clean(input.Entrypoint)), selector, "--field", "value")
-
-	binary := opts.BinaryPath
-	if binary == "" {
-		binary = DefaultBinaryName
-	}
-
-	return runTypstCommandWithOutput(ctx, binary, args, opts.Timeout)
+	return content, nil
 }
 
 func validateInput(input Input) error {
@@ -219,6 +218,16 @@ func validateInput(input Input) error {
 
 	if _, ok := input.Files[input.Entrypoint]; !ok {
 		return fmt.Errorf("%w: entrypoint %q not found in files", ErrInvalidInput, input.Entrypoint)
+	}
+
+	if len(input.DataJSON) == 0 {
+		return nil
+	}
+
+	for relPath := range input.Files {
+		if filepath.Clean(relPath) == dataFileName {
+			return fmt.Errorf("%w: bundle file %q collides with the data file", ErrInvalidInput, relPath)
+		}
 	}
 
 	return nil
@@ -246,7 +255,7 @@ func writeBundleFiles(tmpDir string, input Input) error {
 	}
 
 	if len(input.DataJSON) > 0 {
-		dataPath := filepath.Join(tmpDir, "data.json")
+		dataPath := filepath.Join(tmpDir, dataFileName)
 		if err := os.WriteFile(dataPath, input.DataJSON, 0o600); err != nil {
 			return fmt.Errorf("failed to write data.json: %w", err)
 		}
@@ -305,20 +314,9 @@ func buildBaseArgs(subcommand, rootDir, cacheDir string, opts CompileOptions) []
 	return args
 }
 
-func buildCompileArgs(rootDir, cacheDir, entrypoint, outPDF string, opts CompileOptions) []string {
-	args := buildBaseArgs("compile", rootDir, cacheDir, opts)
-	args = append(args, filepath.Join(rootDir, filepath.Clean(entrypoint)), outPDF)
-
-	return args
-}
-
-func runTypstCommand(ctx context.Context, binary string, args []string, timeout time.Duration) error {
-	_, err := runTypstCommandWithOutput(ctx, binary, args, timeout)
-
-	return err
-}
-
-func runTypstCommandWithOutput(ctx context.Context, binary string, args []string, timeout time.Duration) ([]byte, error) {
+// runTypstCommand runs typst and returns its stdout, which is limited to maxStdout bytes.
+// Diagnostics on stderr are kept up to maxDiagnosticBytes for the returned error.
+func runTypstCommand(ctx context.Context, binary string, args []string, timeout time.Duration, maxStdout int64) ([]byte, error) {
 	if timeout <= 0 {
 		timeout = DefaultCompileTimeout
 	}
@@ -332,10 +330,11 @@ func runTypstCommandWithOutput(ctx context.Context, binary string, args []string
 	cmd.Env = processEnv()
 	cmd.WaitDelay = processWaitDelay
 
-	var stdout, stderr bytes.Buffer
+	stdout := &cappedBuffer{limit: maxStdout}
+	stderr := &cappedBuffer{limit: maxDiagnosticBytes}
 
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 
 	if err := cmd.Run(); err != nil {
 		if errors.Is(cmdCtx.Err(), context.DeadlineExceeded) {
@@ -354,7 +353,44 @@ func runTypstCommandWithOutput(ctx context.Context, binary string, args []string
 		return nil, fmt.Errorf("%w: %w", ErrCompileFailed, err)
 	}
 
-	return stdout.Bytes(), nil
+	if stdout.truncated {
+		return nil, fmt.Errorf("%w: output exceeds %d bytes", ErrOutputTooLarge, maxStdout)
+	}
+
+	return stdout.buf.Bytes(), nil
+}
+
+// cappedBuffer keeps at most limit bytes and silently discards the rest, so that a chatty
+// process cannot exhaust memory while it is still able to write (no broken pipe).
+type cappedBuffer struct {
+	buf       bytes.Buffer
+	limit     int64
+	truncated bool
+}
+
+func (b *cappedBuffer) Write(p []byte) (int, error) {
+	kept := p
+
+	remaining := b.limit - int64(b.buf.Len())
+	if int64(len(p)) > remaining {
+		b.truncated = true
+		kept = p[:max(remaining, 0)]
+	}
+
+	b.buf.Write(kept)
+
+	// Report the full length: discarded bytes count as written, otherwise exec treats it as a
+	// short write and fails the command.
+	return len(p), nil
+}
+
+// String returns the kept content, marked as truncated if bytes were discarded.
+func (b *cappedBuffer) String() string {
+	if b.truncated {
+		return b.buf.String() + " … (truncated)"
+	}
+
+	return b.buf.String()
 }
 
 // processEnv returns the minimal environment for the typst process. Only PATH is passed

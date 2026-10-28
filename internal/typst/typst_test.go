@@ -346,3 +346,63 @@ Hello Page 2
 		t.Fatalf("expected PNG header, got %x", png[:8])
 	}
 }
+
+func TestCompile_DataFileCollisionFails(t *testing.T) {
+	input := typst.Input{
+		Entrypoint: "main.typ",
+		Files: map[string][]byte{
+			"main.typ":    []byte(`#json("data.json").name`),
+			"./data.json": []byte(`{"name": "aus dem Bundle"}`),
+		},
+		DataJSON: []byte(`{"name": "aus den Daten"}`),
+	}
+
+	_, err := typst.Compile(context.Background(), typst.CompileOptions{}, input)
+	if !errors.Is(err, typst.ErrInvalidInput) {
+		t.Errorf("expected ErrInvalidInput for a bundle data.json next to DataJSON, got: %v", err)
+	}
+}
+
+func TestOutputSizeLimit(t *testing.T) {
+	ctx := context.Background()
+
+	input := typst.Input{
+		Entrypoint: "main.typ",
+		Files: map[string][]byte{
+			"main.typ": []byte(`#metadata((text: "` + strings.Repeat("x", 512) + `")) <doc-item>
+= Document`),
+		},
+	}
+
+	opts := typst.CompileOptions{Timeout: 10 * time.Second, MaxOutputBytes: 256}
+
+	t.Run("compile", func(t *testing.T) {
+		if _, err := typst.Compile(ctx, opts, input); !errors.Is(err, typst.ErrOutputTooLarge) {
+			t.Errorf("expected ErrOutputTooLarge, got: %v", err)
+		}
+	})
+
+	t.Run("query", func(t *testing.T) {
+		if _, err := typst.Query(ctx, opts, input, "<doc-item>"); !errors.Is(err, typst.ErrOutputTooLarge) {
+			t.Errorf("expected ErrOutputTooLarge, got: %v", err)
+		}
+	})
+}
+
+func TestCompile_DiagnosticsAreTruncated(t *testing.T) {
+	input := typst.Input{
+		Entrypoint: "main.typ",
+		Files: map[string][]byte{
+			"main.typ": []byte(strings.Repeat("#panic(\"boom\")\n", 1) + `#panic("` + strings.Repeat("y", 200_000) + `")`),
+		},
+	}
+
+	_, err := typst.Compile(context.Background(), typst.CompileOptions{Timeout: 10 * time.Second}, input)
+	if !errors.Is(err, typst.ErrCompileFailed) {
+		t.Fatalf("expected ErrCompileFailed, got: %v", err)
+	}
+
+	if len(err.Error()) > 70_000 {
+		t.Errorf("expected diagnostics to be truncated, got %d bytes", len(err.Error()))
+	}
+}
