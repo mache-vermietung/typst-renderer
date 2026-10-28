@@ -283,3 +283,66 @@ func TestCompile_RemovesTemporaryDirectory(t *testing.T) {
 		t.Errorf("expected temporary directory to be removed, found %d entries", len(entries))
 	}
 }
+
+func TestQuery_Metadata(t *testing.T) {
+	ctx := context.Background()
+
+	input := typst.Input{
+		Entrypoint: "main.typ",
+		Files: map[string][]byte{
+			"main.typ": []byte(`
+#metadata((kind: "clause", key: "rent", amount: 1200)) <doc-item>
+#metadata((kind: "party", role: "tenant", name: "Max Mustermann")) <doc-item>
+= Document
+Body text.
+`),
+		},
+	}
+
+	opts := typst.CompileOptions{
+		Timeout: 10 * time.Second,
+	}
+
+	res, err := typst.Query(ctx, opts, input, "<doc-item>")
+	if err != nil {
+		t.Fatalf("unexpected query error: %v", err)
+	}
+
+	// typst query output can have arbitrary whitespace or key order, but it must contain our data
+	if !strings.Contains(string(res), `"rent"`) || !strings.Contains(string(res), `"Max Mustermann"`) {
+		t.Fatalf("expected query output to contain rent and Max Mustermann, got: %s", string(res))
+	}
+}
+
+func TestCompilePNG(t *testing.T) {
+	ctx := context.Background()
+
+	input := typst.Input{
+		Entrypoint: "main.typ",
+		Files: map[string][]byte{
+			"main.typ": []byte(`
+#set page(paper: "a4")
+= Page 1
+Hello PNG
+#pagebreak()
+= Page 2
+Hello Page 2
+`),
+		},
+	}
+
+	opts := typst.CompileOptions{
+		Timeout: 10 * time.Second,
+	}
+
+	png, err := typst.CompilePNG(ctx, opts, input, 1)
+	if err != nil {
+		t.Fatalf("unexpected compile PNG error: %v", err)
+	}
+
+	// PNG file signature: 89 50 4E 47 0D 0A 1A 0A
+	pngHeader := []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}
+	if !bytes.HasPrefix(png, pngHeader) {
+		t.Fatalf("expected PNG header, got %x", png[:8])
+	}
+}

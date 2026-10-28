@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -117,6 +118,96 @@ func Compile(ctx context.Context, opts CompileOptions, input Input) ([]byte, err
 	return pdfBytes, nil
 }
 
+// CompilePNG compiles a specific 1-based page of a template bundle to a PNG image.
+func CompilePNG(ctx context.Context, opts CompileOptions, input Input, page int) ([]byte, error) {
+	if err := validateInput(input); err != nil {
+		return nil, err
+	}
+
+	if page < 1 {
+		return nil, fmt.Errorf("%w: page must be >= 1", ErrInvalidInput)
+	}
+
+	workDir, err := os.MkdirTemp("", "domio-typst-png-*")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create temp directory: %w", err)
+	}
+
+	defer func() {
+		_ = os.RemoveAll(workDir)
+	}()
+
+	rootDir, cacheDir, err := createWorkDirs(workDir)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := writeBundleFiles(rootDir, input); err != nil {
+		return nil, err
+	}
+
+	outTemplate := filepath.Join(workDir, "out-{p}.png")
+	args := buildBaseArgs("compile", rootDir, cacheDir, opts)
+	args = append(args, "--format", "png", "--pages", strconv.Itoa(page), filepath.Join(rootDir, filepath.Clean(input.Entrypoint)), outTemplate)
+
+	binary := opts.BinaryPath
+	if binary == "" {
+		binary = DefaultBinaryName
+	}
+
+	if err := runTypstCommand(ctx, binary, args, opts.Timeout); err != nil {
+		return nil, err
+	}
+
+	outPNG := filepath.Join(workDir, fmt.Sprintf("out-%d.png", page))
+	// #nosec G304 -- outPNG is located in the freshly created isolated temporary directory
+	pngBytes, err := os.ReadFile(outPNG)
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to read generated PNG: %w", ErrCompileFailed, err)
+	}
+
+	return pngBytes, nil
+}
+
+// Query runs typst query on a template bundle and returns the matching elements in JSON format.
+func Query(ctx context.Context, opts CompileOptions, input Input, selector string) ([]byte, error) {
+	if err := validateInput(input); err != nil {
+		return nil, err
+	}
+
+	if selector == "" {
+		return nil, fmt.Errorf("%w: selector is required", ErrInvalidInput)
+	}
+
+	workDir, err := os.MkdirTemp("", "domio-typst-query-*")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create temp directory: %w", err)
+	}
+
+	defer func() {
+		_ = os.RemoveAll(workDir)
+	}()
+
+	rootDir, cacheDir, err := createWorkDirs(workDir)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := writeBundleFiles(rootDir, input); err != nil {
+		return nil, err
+	}
+
+	args := buildBaseArgs("query", rootDir, cacheDir, opts)
+	args = append(args, filepath.Join(rootDir, filepath.Clean(input.Entrypoint)), selector, "--field", "value")
+
+	binary := opts.BinaryPath
+	if binary == "" {
+		binary = DefaultBinaryName
+	}
+
+	return runTypstCommandWithOutput(ctx, binary, args, opts.Timeout)
+}
+
 func validateInput(input Input) error {
 	if input.Entrypoint == "" {
 		return fmt.Errorf("%w: entrypoint is required", ErrInvalidInput)
@@ -188,8 +279,8 @@ func writeSingleFile(tmpDir, relPath string, content []byte) error {
 	return nil
 }
 
-func buildCompileArgs(rootDir, cacheDir, entrypoint, outPDF string, opts CompileOptions) []string {
-	args := []string{"compile", "--root", rootDir, "--package-cache-path", cacheDir}
+func buildBaseArgs(subcommand, rootDir, cacheDir string, opts CompileOptions) []string {
+	args := []string{subcommand, "--root", rootDir, "--package-cache-path", cacheDir}
 
 	if opts.PackagePath != "" {
 		absPkgPath, err := filepath.Abs(opts.PackagePath)
@@ -211,12 +302,23 @@ func buildCompileArgs(rootDir, cacheDir, entrypoint, outPDF string, opts Compile
 		}
 	}
 
+	return args
+}
+
+func buildCompileArgs(rootDir, cacheDir, entrypoint, outPDF string, opts CompileOptions) []string {
+	args := buildBaseArgs("compile", rootDir, cacheDir, opts)
 	args = append(args, filepath.Join(rootDir, filepath.Clean(entrypoint)), outPDF)
 
 	return args
 }
 
 func runTypstCommand(ctx context.Context, binary string, args []string, timeout time.Duration) error {
+	_, err := runTypstCommandWithOutput(ctx, binary, args, timeout)
+
+	return err
+}
+
+func runTypstCommandWithOutput(ctx context.Context, binary string, args []string, timeout time.Duration) ([]byte, error) {
 	if timeout <= 0 {
 		timeout = DefaultCompileTimeout
 	}
@@ -230,28 +332,29 @@ func runTypstCommand(ctx context.Context, binary string, args []string, timeout 
 	cmd.Env = processEnv()
 	cmd.WaitDelay = processWaitDelay
 
-	var stderr bytes.Buffer
+	var stdout, stderr bytes.Buffer
 
+	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
 		if errors.Is(cmdCtx.Err(), context.DeadlineExceeded) {
-			return fmt.Errorf("%w: %w", ErrCompileTimeout, cmdCtx.Err())
+			return nil, fmt.Errorf("%w: %w", ErrCompileTimeout, cmdCtx.Err())
 		}
 
 		if errors.Is(err, exec.ErrNotFound) {
-			return fmt.Errorf("%w: binary %s not found: %w", ErrBinaryNotFound, binary, err)
+			return nil, fmt.Errorf("%w: binary %s not found: %w", ErrBinaryNotFound, binary, err)
 		}
 
 		diag := strings.TrimSpace(stderr.String())
 		if diag != "" {
-			return fmt.Errorf("%w: %s", ErrCompileFailed, diag)
+			return nil, fmt.Errorf("%w: %s", ErrCompileFailed, diag)
 		}
 
-		return fmt.Errorf("%w: %w", ErrCompileFailed, err)
+		return nil, fmt.Errorf("%w: %w", ErrCompileFailed, err)
 	}
 
-	return nil
+	return stdout.Bytes(), nil
 }
 
 // processEnv returns the minimal environment for the typst process. Only PATH is passed
