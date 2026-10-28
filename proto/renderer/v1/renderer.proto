@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package renderer.v1;
+
+option go_package = "github.com/tobima/domio/internal/renderer/proto/renderer/v1;rendererv1";
+
+service RendererService {
+  rpc Render(RenderRequest) returns (RenderResponse);
+  rpc Query(QueryRequest) returns (QueryResponse);
+}
+
+message RenderRequest {
+  string entrypoint = 1;
+  map<string, bytes> files = 2;
+  bytes data_json = 3;
+  string pdf_standard = 4;
+}
+
+message RenderResponse {
+  bytes pdf = 1;
+}
+
+message QueryRequest {
+  string entrypoint = 1;
+  map<string, bytes> files = 2;
+  bytes data_json = 3;
+  string selector = 4;
+  string field = 5;
+}
+
+message QueryResponse {
+  bytes data_json = 1;
+}
