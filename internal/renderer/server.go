@@ -91,35 +91,17 @@ func (s *Server) Render(ctx context.Context, req *rendererv1.RenderRequest) (*re
 	inBytes := s.calculateRequestBytes(req.GetEntrypoint(), req.GetFiles(), req.GetDataJson())
 
 	resp, err := s.handleRender(ctx, req, inBytes)
-	durationSec := time.Since(start).Seconds()
-
-	st := status.Convert(err)
 
 	var outBytes int64
 	if resp != nil {
 		outBytes = int64(len(resp.GetPdf()))
 	}
 
-	s.metrics.recordRequest(ctx, "Render", st.Code().String(), durationSec, inBytes, outBytes)
+	s.finish(ctx, span, "Render", start, inBytes, outBytes, err)
 
 	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, st.Message())
-		slog.ErrorContext(ctx, "render failed",
-			slog.String("code", st.Code().String()),
-			slog.String("error", st.Message()),
-			slog.Int64("request_bytes", inBytes),
-			slog.Duration("duration", time.Since(start)),
-		)
-
 		return nil, err
 	}
-
-	slog.InfoContext(ctx, "rendered document successfully",
-		slog.Int64("request_bytes", inBytes),
-		slog.Int64("response_bytes", outBytes),
-		slog.Duration("duration", time.Since(start)),
-	)
 
 	return resp, nil
 }
@@ -134,60 +116,73 @@ func (s *Server) Query(ctx context.Context, req *rendererv1.QueryRequest) (*rend
 	inBytes := s.calculateRequestBytes(req.GetEntrypoint(), req.GetFiles(), req.GetDataJson())
 
 	resp, err := s.handleQuery(ctx, req, inBytes)
-	durationSec := time.Since(start).Seconds()
-
-	st := status.Convert(err)
 
 	var outBytes int64
 	if resp != nil {
 		outBytes = int64(len(resp.GetDataJson()))
 	}
 
-	s.metrics.recordRequest(ctx, "Query", st.Code().String(), durationSec, inBytes, outBytes)
+	s.finish(ctx, span, "Query", start, inBytes, outBytes, err)
 
 	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, st.Message())
-		slog.ErrorContext(ctx, "query failed",
-			slog.String("code", st.Code().String()),
-			slog.String("error", st.Message()),
-			slog.Int64("request_bytes", inBytes),
-			slog.Duration("duration", time.Since(start)),
-		)
-
 		return nil, err
 	}
 
 	return resp, nil
 }
 
+// finish records metrics, span and the log line of a request. Typst diagnostics can quote template
+// source and data (personal data): like the local adapter they stay in the span's error event and
+// the status message for the caller, but not in the log or the span status.
+func (s *Server) finish(ctx context.Context, span trace.Span, method string, start time.Time, inBytes, outBytes int64, err error) {
+	duration := time.Since(start)
+	st := status.Convert(err)
+	reason := rendererv1.ReasonOf(st)
+
+	s.metrics.recordRequest(ctx, method, st.Code().String(), duration.Seconds(), inBytes, outBytes)
+
+	if err == nil {
+		slog.InfoContext(ctx, "renderer request succeeded",
+			slog.String("method", method),
+			slog.Int64("request_bytes", inBytes),
+			slog.Int64("response_bytes", outBytes),
+			slog.Duration("duration", duration),
+		)
+
+		return
+	}
+
+	message := st.Message()
+	if reason == rendererv1.ErrorReason_ERROR_REASON_COMPILE_FAILED {
+		message = "typst compilation failed"
+	}
+
+	span.RecordError(err)
+	span.SetStatus(codes.Error, message)
+	slog.ErrorContext(ctx, "renderer request failed",
+		slog.String("method", method),
+		slog.String("code", st.Code().String()),
+		slog.String("reason", reason.String()),
+		slog.String("error", message),
+		slog.Int64("request_bytes", inBytes),
+		slog.Duration("duration", duration),
+	)
+}
+
 func (s *Server) handleRender(ctx context.Context, req *rendererv1.RenderRequest, inBytes int64) (*rendererv1.RenderResponse, error) {
-	if s.config.MaxRequestBytes > 0 && inBytes > s.config.MaxRequestBytes {
-		return nil, status.Errorf(grpccodes.ResourceExhausted, "request size %d exceeds limit of %d bytes", inBytes, s.config.MaxRequestBytes)
+	release, err := s.admit(req.GetEntrypoint(), req.GetFiles(), inBytes)
+	if err != nil {
+		return nil, err
 	}
-
-	if err := s.validateBundle(req.GetEntrypoint(), req.GetFiles()); err != nil {
-		return nil, status.Errorf(grpccodes.InvalidArgument, "%s", err.Error())
-	}
-
-	select {
-	case s.sem <- struct{}{}:
-		defer func() { <-s.sem }()
-	default:
-		return nil, status.Errorf(grpccodes.ResourceExhausted, "concurrency limit exceeded (max: %d)", s.config.MaxConcurrency)
-	}
+	defer release()
 
 	timeout := s.calculateTimeout(ctx)
 
 	compileCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	opts := typst.CompileOptions{
-		BinaryPath:  s.config.TypstBinaryPath,
-		PackagePath: s.config.PackagePath,
-		FontPath:    s.config.FontPath,
-		Timeout:     timeout,
-	}
+	opts := s.compileOptions(timeout)
+	opts.PDFStandard = req.GetPdfStandard()
 
 	in := typst.Input{
 		Entrypoint: req.GetEntrypoint(),
@@ -197,43 +192,27 @@ func (s *Server) handleRender(ctx context.Context, req *rendererv1.RenderRequest
 
 	pdfBytes, err := typst.Compile(compileCtx, opts, in)
 	if err != nil {
-		return nil, s.mapTypstError(err)
+		return nil, s.mapTypstError(ctx, err)
 	}
 
 	return &rendererv1.RenderResponse{Pdf: pdfBytes}, nil
 }
 
 func (s *Server) handleQuery(ctx context.Context, req *rendererv1.QueryRequest, inBytes int64) (*rendererv1.QueryResponse, error) {
-	if s.config.MaxRequestBytes > 0 && inBytes > s.config.MaxRequestBytes {
-		return nil, status.Errorf(grpccodes.ResourceExhausted, "request size %d exceeds limit of %d bytes", inBytes, s.config.MaxRequestBytes)
-	}
-
-	if err := s.validateBundle(req.GetEntrypoint(), req.GetFiles()); err != nil {
-		return nil, status.Errorf(grpccodes.InvalidArgument, "%s", err.Error())
-	}
-
 	if strings.TrimSpace(req.GetSelector()) == "" {
-		return nil, status.Error(grpccodes.InvalidArgument, "selector is required")
+		return nil, invalidBundle("selector is required")
 	}
 
-	select {
-	case s.sem <- struct{}{}:
-		defer func() { <-s.sem }()
-	default:
-		return nil, status.Errorf(grpccodes.ResourceExhausted, "concurrency limit exceeded (max: %d)", s.config.MaxConcurrency)
+	release, err := s.admit(req.GetEntrypoint(), req.GetFiles(), inBytes)
+	if err != nil {
+		return nil, err
 	}
+	defer release()
 
 	timeout := s.calculateTimeout(ctx)
 
 	queryCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-
-	opts := typst.CompileOptions{
-		BinaryPath:  s.config.TypstBinaryPath,
-		PackagePath: s.config.PackagePath,
-		FontPath:    s.config.FontPath,
-		Timeout:     timeout,
-	}
 
 	in := typst.Input{
 		Entrypoint: req.GetEntrypoint(),
@@ -241,12 +220,42 @@ func (s *Server) handleQuery(ctx context.Context, req *rendererv1.QueryRequest, 
 		DataJSON:   req.GetDataJson(),
 	}
 
-	dataBytes, err := typst.Query(queryCtx, opts, in, req.GetSelector())
+	dataBytes, err := typst.Query(queryCtx, s.compileOptions(timeout), in, req.GetSelector())
 	if err != nil {
-		return nil, s.mapTypstError(err)
+		return nil, s.mapTypstError(ctx, err)
 	}
 
 	return &rendererv1.QueryResponse{DataJson: dataBytes}, nil
+}
+
+// admit checks the request size and the bundle and takes a concurrency slot; the returned release
+// frees the slot.
+func (s *Server) admit(entrypoint string, files map[string][]byte, inBytes int64) (release func(), err error) {
+	if s.config.MaxRequestBytes > 0 && inBytes > s.config.MaxRequestBytes {
+		return nil, rendererv1.NewStatusError(grpccodes.ResourceExhausted, rendererv1.ErrorReason_ERROR_REASON_REQUEST_TOO_LARGE,
+			fmt.Sprintf("request size %d exceeds limit of %d bytes", inBytes, s.config.MaxRequestBytes))
+	}
+
+	if err := s.validateBundle(entrypoint, files); err != nil {
+		return nil, invalidBundle(err.Error())
+	}
+
+	select {
+	case s.sem <- struct{}{}:
+		return func() { <-s.sem }, nil
+	default:
+		return nil, rendererv1.NewStatusError(grpccodes.ResourceExhausted, rendererv1.ErrorReason_ERROR_REASON_CONCURRENCY_LIMIT,
+			fmt.Sprintf("concurrency limit exceeded (max: %d)", cap(s.sem)))
+	}
+}
+
+func (s *Server) compileOptions(timeout time.Duration) typst.CompileOptions {
+	return typst.CompileOptions{
+		BinaryPath:  s.config.TypstBinaryPath,
+		PackagePath: s.config.PackagePath,
+		FontPath:    s.config.FontPath,
+		Timeout:     timeout,
+	}
 }
 
 func (s *Server) calculateRequestBytes(entrypoint string, files map[string][]byte, dataJSON []byte) int64 {
@@ -259,12 +268,11 @@ func (s *Server) calculateRequestBytes(entrypoint string, files map[string][]byt
 }
 
 func (s *Server) validateBundle(entrypoint string, files map[string][]byte) error {
-	entrypoint = strings.TrimSpace(entrypoint)
-	if entrypoint == "" {
+	if strings.TrimSpace(entrypoint) == "" {
 		return ErrEntrypointRequired
 	}
 
-	if filepath.IsAbs(entrypoint) || strings.HasPrefix(entrypoint, "../") || strings.Contains(entrypoint, "/../") {
+	if !filepath.IsLocal(entrypoint) {
 		return fmt.Errorf("%w: %q", ErrInvalidEntrypointPath, entrypoint)
 	}
 
@@ -273,7 +281,7 @@ func (s *Server) validateBundle(entrypoint string, files map[string][]byte) erro
 	}
 
 	for path := range files {
-		if filepath.IsAbs(path) || strings.HasPrefix(path, "../") || strings.Contains(path, "/../") {
+		if !filepath.IsLocal(path) {
 			return fmt.Errorf("%w: %q", ErrInvalidFilePath, path)
 		}
 	}
@@ -284,7 +292,7 @@ func (s *Server) validateBundle(entrypoint string, files map[string][]byte) erro
 func (s *Server) calculateTimeout(ctx context.Context) time.Duration {
 	maxTimeout := time.Duration(s.config.MaxTimeoutSeconds) * time.Second
 	if maxTimeout <= 0 {
-		maxTimeout = 20 * time.Second
+		maxTimeout = DefaultMaxTimeoutSeconds * time.Second
 	}
 
 	if deadline, ok := ctx.Deadline(); ok {
@@ -297,26 +305,29 @@ func (s *Server) calculateTimeout(ctx context.Context) time.Duration {
 	return maxTimeout
 }
 
-func (s *Server) mapTypstError(err error) error {
-	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, typst.ErrCompileTimeout) {
-		return status.Errorf(grpccodes.DeadlineExceeded, "rendering timed out: %v", err)
+func invalidBundle(msg string) error {
+	return rendererv1.NewStatusError(grpccodes.InvalidArgument, rendererv1.ErrorReason_ERROR_REASON_INVALID_BUNDLE, msg)
+}
+
+// mapTypstError translates a typst error into a status with code and ErrorReason. ctx is the
+// request context: a caller that went away gets Canceled instead of a compile failure.
+func (s *Server) mapTypstError(ctx context.Context, err error) error {
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return status.Error(grpccodes.Canceled, "request canceled by the caller")
 	}
 
-	if errors.Is(err, typst.ErrOutputTooLarge) {
-		return status.Errorf(grpccodes.ResourceExhausted, "%v", err)
-	}
-
-	if errors.Is(err, typst.ErrInvalidInput) {
-		return status.Errorf(grpccodes.InvalidArgument, "%v", err)
-	}
-
-	if errors.Is(err, typst.ErrCompileFailed) {
-		return status.Errorf(grpccodes.InvalidArgument, "compilation failed: %v", err)
-	}
-
-	if errors.Is(err, typst.ErrBinaryNotFound) {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded) || errors.Is(err, typst.ErrCompileTimeout):
+		return rendererv1.NewStatusError(grpccodes.DeadlineExceeded, rendererv1.ErrorReason_ERROR_REASON_TIMEOUT, err.Error())
+	case errors.Is(err, typst.ErrOutputTooLarge):
+		return rendererv1.NewStatusError(grpccodes.ResourceExhausted, rendererv1.ErrorReason_ERROR_REASON_OUTPUT_TOO_LARGE, err.Error())
+	case errors.Is(err, typst.ErrInvalidInput):
+		return invalidBundle(err.Error())
+	case errors.Is(err, typst.ErrCompileFailed):
+		return rendererv1.NewStatusError(grpccodes.InvalidArgument, rendererv1.ErrorReason_ERROR_REASON_COMPILE_FAILED, err.Error())
+	case errors.Is(err, typst.ErrBinaryNotFound):
 		return status.Errorf(grpccodes.Internal, "typst binary not found: %v", err)
+	default:
+		return status.Errorf(grpccodes.Internal, "rendering failed: %v", err)
 	}
-
-	return status.Errorf(grpccodes.Internal, "rendering failed: %v", err)
 }

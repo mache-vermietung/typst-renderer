@@ -53,6 +53,33 @@ type CompileOptions struct {
 	Timeout     time.Duration
 	// MaxOutputBytes limits the generated output; 0 means DefaultMaxOutputBytes.
 	MaxOutputBytes int64
+	// PDFStandard is passed to compile as --pdf-standard (one or more comma-separated values from
+	// pdfStandards, e.g. "a-2b"); empty means typst's default.
+	PDFStandard string
+}
+
+// pdfStandards are the values typst accepts for --pdf-standard.
+var pdfStandards = map[string]bool{
+	"1.4": true, "1.5": true, "1.6": true, "1.7": true, "2.0": true,
+	"a-1b": true, "a-1a": true, "a-2b": true, "a-2u": true, "a-2a": true,
+	"a-3b": true, "a-3u": true, "a-3a": true, "a-4": true, "a-4f": true, "a-4e": true,
+	"ua-1": true,
+}
+
+// validatePDFStandard rejects values typst does not know, so that no arbitrary argument reaches
+// the command line.
+func validatePDFStandard(standard string) error {
+	if standard == "" {
+		return nil
+	}
+
+	for value := range strings.SplitSeq(standard, ",") {
+		if !pdfStandards[value] {
+			return fmt.Errorf("%w: unsupported pdf standard %q", ErrInvalidInput, value)
+		}
+	}
+
+	return nil
 }
 
 // Input represents the template bundle and data to compile.
@@ -85,10 +112,19 @@ func CheckBinary(ctx context.Context, binaryPath string) (string, error) {
 // per-call directory and all HTTP(S) traffic goes to an unreachable proxy, so imports
 // of packages that are not vendored fail instead of being downloaded.
 func Compile(ctx context.Context, opts CompileOptions, input Input) ([]byte, error) {
+	if err := validatePDFStandard(opts.PDFStandard); err != nil {
+		return nil, err
+	}
+
 	return runInSandbox(ctx, opts, input, func(s sandbox) ([]string, string) {
 		outPDF := filepath.Join(s.workDir, "out.pdf")
+		args := s.baseArgs("compile")
 
-		return append(s.baseArgs("compile"), s.entrypoint, outPDF), outPDF
+		if opts.PDFStandard != "" {
+			args = append(args, "--pdf-standard", opts.PDFStandard)
+		}
+
+		return append(args, s.entrypoint, outPDF), outPDF
 	})
 }
 

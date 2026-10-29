@@ -406,3 +406,34 @@ func TestCompile_DiagnosticsAreTruncated(t *testing.T) {
 		t.Errorf("expected diagnostics to be truncated, got %d bytes", len(err.Error()))
 	}
 }
+
+func TestCompile_PDFStandard(t *testing.T) {
+	input := typst.Input{
+		Entrypoint: "main.typ",
+		Files:      map[string][]byte{"main.typ": []byte("= Archiv")},
+	}
+
+	pdf, err := typst.Compile(context.Background(), typst.CompileOptions{PDFStandard: "a-2b"}, input)
+	if err != nil {
+		t.Fatalf("expected successful compilation, got: %v", err)
+	}
+
+	// PDF/A output declares its conformance in the XMP metadata.
+	if !bytes.Contains(pdf, []byte("pdfaid")) {
+		t.Errorf("expected PDF/A identification in the output")
+	}
+}
+
+func TestCompile_UnsupportedPDFStandardFails(t *testing.T) {
+	input := typst.Input{
+		Entrypoint: "main.typ",
+		Files:      map[string][]byte{"main.typ": []byte("= Archiv")},
+	}
+
+	for _, standard := range []string{"a-9z", "a-2b,--input=x", "--help"} {
+		_, err := typst.Compile(context.Background(), typst.CompileOptions{PDFStandard: standard}, input)
+		if !errors.Is(err, typst.ErrInvalidInput) {
+			t.Errorf("standard %q: expected ErrInvalidInput, got: %v", standard, err)
+		}
+	}
+}

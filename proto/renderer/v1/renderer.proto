@@ -13,6 +13,7 @@ message RenderRequest {
   string entrypoint = 1;
   map<string, bytes> files = 2;
   bytes data_json = 3;
+  // Optional typst PDF standard(s), comma-separated (e.g. "a-2b"); empty means typst's default.
   string pdf_standard = 4;
 }
 
@@ -21,13 +22,33 @@ message RenderResponse {
 }
 
 message QueryRequest {
+  reserved 5;
+  reserved "field";
+
   string entrypoint = 1;
   map<string, bytes> files = 2;
   bytes data_json = 3;
   string selector = 4;
-  string field = 5;
 }
 
 message QueryResponse {
   bytes data_json = 1;
+}
+
+// ErrorReason is sent as google.rpc.ErrorInfo.reason (domain "renderer.domio") with every error
+// status, so clients can tell failures apart that share a gRPC code.
+enum ErrorReason {
+  ERROR_REASON_UNSPECIFIED = 0;
+  // The bundle is invalid (entrypoint, paths, PDF standard); code INVALID_ARGUMENT.
+  ERROR_REASON_INVALID_BUNDLE = 1;
+  // Typst rejected the template; code INVALID_ARGUMENT, the message carries the diagnostics.
+  ERROR_REASON_COMPILE_FAILED = 2;
+  // Compilation exceeded the timeout; code DEADLINE_EXCEEDED.
+  ERROR_REASON_TIMEOUT = 3;
+  // The generated output exceeds the output limit; code RESOURCE_EXHAUSTED.
+  ERROR_REASON_OUTPUT_TOO_LARGE = 4;
+  // The request exceeds RENDERER_MAX_REQUEST_BYTES; code RESOURCE_EXHAUSTED.
+  ERROR_REASON_REQUEST_TOO_LARGE = 5;
+  // All RENDERER_MAX_CONCURRENCY slots are busy, retrying later can succeed; code RESOURCE_EXHAUSTED.
+  ERROR_REASON_CONCURRENCY_LIMIT = 6;
 }

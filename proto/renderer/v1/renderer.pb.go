@@ -21,12 +21,82 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// ErrorReason is sent as google.rpc.ErrorInfo.reason (domain "renderer.domio") with every error
+// status, so clients can tell failures apart that share a gRPC code.
+type ErrorReason int32
+
+const (
+	ErrorReason_ERROR_REASON_UNSPECIFIED ErrorReason = 0
+	// The bundle is invalid (entrypoint, paths, PDF standard); code INVALID_ARGUMENT.
+	ErrorReason_ERROR_REASON_INVALID_BUNDLE ErrorReason = 1
+	// Typst rejected the template; code INVALID_ARGUMENT, the message carries the diagnostics.
+	ErrorReason_ERROR_REASON_COMPILE_FAILED ErrorReason = 2
+	// Compilation exceeded the timeout; code DEADLINE_EXCEEDED.
+	ErrorReason_ERROR_REASON_TIMEOUT ErrorReason = 3
+	// The generated output exceeds the output limit; code RESOURCE_EXHAUSTED.
+	ErrorReason_ERROR_REASON_OUTPUT_TOO_LARGE ErrorReason = 4
+	// The request exceeds RENDERER_MAX_REQUEST_BYTES; code RESOURCE_EXHAUSTED.
+	ErrorReason_ERROR_REASON_REQUEST_TOO_LARGE ErrorReason = 5
+	// All RENDERER_MAX_CONCURRENCY slots are busy, retrying later can succeed; code RESOURCE_EXHAUSTED.
+	ErrorReason_ERROR_REASON_CONCURRENCY_LIMIT ErrorReason = 6
+)
+
+// Enum value maps for ErrorReason.
+var (
+	ErrorReason_name = map[int32]string{
+		0: "ERROR_REASON_UNSPECIFIED",
+		1: "ERROR_REASON_INVALID_BUNDLE",
+		2: "ERROR_REASON_COMPILE_FAILED",
+		3: "ERROR_REASON_TIMEOUT",
+		4: "ERROR_REASON_OUTPUT_TOO_LARGE",
+		5: "ERROR_REASON_REQUEST_TOO_LARGE",
+		6: "ERROR_REASON_CONCURRENCY_LIMIT",
+	}
+	ErrorReason_value = map[string]int32{
+		"ERROR_REASON_UNSPECIFIED":       0,
+		"ERROR_REASON_INVALID_BUNDLE":    1,
+		"ERROR_REASON_COMPILE_FAILED":    2,
+		"ERROR_REASON_TIMEOUT":           3,
+		"ERROR_REASON_OUTPUT_TOO_LARGE":  4,
+		"ERROR_REASON_REQUEST_TOO_LARGE": 5,
+		"ERROR_REASON_CONCURRENCY_LIMIT": 6,
+	}
+)
+
+func (x ErrorReason) Enum() *ErrorReason {
+	p := new(ErrorReason)
+	*p = x
+	return p
+}
+
+func (x ErrorReason) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ErrorReason) Descriptor() protoreflect.EnumDescriptor {
+	return file_internal_renderer_proto_renderer_v1_renderer_proto_enumTypes[0].Descriptor()
+}
+
+func (ErrorReason) Type() protoreflect.EnumType {
+	return &file_internal_renderer_proto_renderer_v1_renderer_proto_enumTypes[0]
+}
+
+func (x ErrorReason) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ErrorReason.Descriptor instead.
+func (ErrorReason) EnumDescriptor() ([]byte, []int) {
+	return file_internal_renderer_proto_renderer_v1_renderer_proto_rawDescGZIP(), []int{0}
+}
+
 type RenderRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Entrypoint    string                 `protobuf:"bytes,1,opt,name=entrypoint,proto3" json:"entrypoint,omitempty"`
-	Files         map[string][]byte      `protobuf:"bytes,2,rep,name=files,proto3" json:"files,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	DataJson      []byte                 `protobuf:"bytes,3,opt,name=data_json,json=dataJson,proto3" json:"data_json,omitempty"`
-	PdfStandard   string                 `protobuf:"bytes,4,opt,name=pdf_standard,json=pdfStandard,proto3" json:"pdf_standard,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Entrypoint string                 `protobuf:"bytes,1,opt,name=entrypoint,proto3" json:"entrypoint,omitempty"`
+	Files      map[string][]byte      `protobuf:"bytes,2,rep,name=files,proto3" json:"files,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	DataJson   []byte                 `protobuf:"bytes,3,opt,name=data_json,json=dataJson,proto3" json:"data_json,omitempty"`
+	// Optional typst PDF standard(s), comma-separated (e.g. "a-2b"); empty means typst's default.
+	PdfStandard   string `protobuf:"bytes,4,opt,name=pdf_standard,json=pdfStandard,proto3" json:"pdf_standard,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -139,7 +209,6 @@ type QueryRequest struct {
 	Files         map[string][]byte      `protobuf:"bytes,2,rep,name=files,proto3" json:"files,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	DataJson      []byte                 `protobuf:"bytes,3,opt,name=data_json,json=dataJson,proto3" json:"data_json,omitempty"`
 	Selector      string                 `protobuf:"bytes,4,opt,name=selector,proto3" json:"selector,omitempty"`
-	Field         string                 `protobuf:"bytes,5,opt,name=field,proto3" json:"field,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -198,13 +267,6 @@ func (x *QueryRequest) GetDataJson() []byte {
 func (x *QueryRequest) GetSelector() string {
 	if x != nil {
 		return x.Selector
-	}
-	return ""
-}
-
-func (x *QueryRequest) GetField() string {
-	if x != nil {
-		return x.Field
 	}
 	return ""
 }
@@ -270,21 +332,28 @@ const file_internal_renderer_proto_renderer_v1_renderer_proto_rawDesc = "" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\fR\x05value:\x028\x01\"\"\n" +
 	"\x0eRenderResponse\x12\x10\n" +
-	"\x03pdf\x18\x01 \x01(\fR\x03pdf\"\xf3\x01\n" +
+	"\x03pdf\x18\x01 \x01(\fR\x03pdf\"\xea\x01\n" +
 	"\fQueryRequest\x12\x1e\n" +
 	"\n" +
 	"entrypoint\x18\x01 \x01(\tR\n" +
 	"entrypoint\x12:\n" +
 	"\x05files\x18\x02 \x03(\v2$.renderer.v1.QueryRequest.FilesEntryR\x05files\x12\x1b\n" +
 	"\tdata_json\x18\x03 \x01(\fR\bdataJson\x12\x1a\n" +
-	"\bselector\x18\x04 \x01(\tR\bselector\x12\x14\n" +
-	"\x05field\x18\x05 \x01(\tR\x05field\x1a8\n" +
+	"\bselector\x18\x04 \x01(\tR\bselector\x1a8\n" +
 	"\n" +
 	"FilesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\fR\x05value:\x028\x01\",\n" +
+	"\x05value\x18\x02 \x01(\fR\x05value:\x028\x01J\x04\b\x05\x10\x06R\x05field\",\n" +
 	"\rQueryResponse\x12\x1b\n" +
-	"\tdata_json\x18\x01 \x01(\fR\bdataJson2\x94\x01\n" +
+	"\tdata_json\x18\x01 \x01(\fR\bdataJson*\xf2\x01\n" +
+	"\vErrorReason\x12\x1c\n" +
+	"\x18ERROR_REASON_UNSPECIFIED\x10\x00\x12\x1f\n" +
+	"\x1bERROR_REASON_INVALID_BUNDLE\x10\x01\x12\x1f\n" +
+	"\x1bERROR_REASON_COMPILE_FAILED\x10\x02\x12\x18\n" +
+	"\x14ERROR_REASON_TIMEOUT\x10\x03\x12!\n" +
+	"\x1dERROR_REASON_OUTPUT_TOO_LARGE\x10\x04\x12\"\n" +
+	"\x1eERROR_REASON_REQUEST_TOO_LARGE\x10\x05\x12\"\n" +
+	"\x1eERROR_REASON_CONCURRENCY_LIMIT\x10\x062\x94\x01\n" +
 	"\x0fRendererService\x12A\n" +
 	"\x06Render\x12\x1a.renderer.v1.RenderRequest\x1a\x1b.renderer.v1.RenderResponse\x12>\n" +
 	"\x05Query\x12\x19.renderer.v1.QueryRequest\x1a\x1a.renderer.v1.QueryResponseBHZFgithub.com/tobima/domio/internal/renderer/proto/renderer/v1;rendererv1b\x06proto3"
@@ -301,22 +370,24 @@ func file_internal_renderer_proto_renderer_v1_renderer_proto_rawDescGZIP() []byt
 	return file_internal_renderer_proto_renderer_v1_renderer_proto_rawDescData
 }
 
+var file_internal_renderer_proto_renderer_v1_renderer_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
 var file_internal_renderer_proto_renderer_v1_renderer_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_internal_renderer_proto_renderer_v1_renderer_proto_goTypes = []any{
-	(*RenderRequest)(nil),  // 0: renderer.v1.RenderRequest
-	(*RenderResponse)(nil), // 1: renderer.v1.RenderResponse
-	(*QueryRequest)(nil),   // 2: renderer.v1.QueryRequest
-	(*QueryResponse)(nil),  // 3: renderer.v1.QueryResponse
-	nil,                    // 4: renderer.v1.RenderRequest.FilesEntry
-	nil,                    // 5: renderer.v1.QueryRequest.FilesEntry
+	(ErrorReason)(0),       // 0: renderer.v1.ErrorReason
+	(*RenderRequest)(nil),  // 1: renderer.v1.RenderRequest
+	(*RenderResponse)(nil), // 2: renderer.v1.RenderResponse
+	(*QueryRequest)(nil),   // 3: renderer.v1.QueryRequest
+	(*QueryResponse)(nil),  // 4: renderer.v1.QueryResponse
+	nil,                    // 5: renderer.v1.RenderRequest.FilesEntry
+	nil,                    // 6: renderer.v1.QueryRequest.FilesEntry
 }
 var file_internal_renderer_proto_renderer_v1_renderer_proto_depIdxs = []int32{
-	4, // 0: renderer.v1.RenderRequest.files:type_name -> renderer.v1.RenderRequest.FilesEntry
-	5, // 1: renderer.v1.QueryRequest.files:type_name -> renderer.v1.QueryRequest.FilesEntry
-	0, // 2: renderer.v1.RendererService.Render:input_type -> renderer.v1.RenderRequest
-	2, // 3: renderer.v1.RendererService.Query:input_type -> renderer.v1.QueryRequest
-	1, // 4: renderer.v1.RendererService.Render:output_type -> renderer.v1.RenderResponse
-	3, // 5: renderer.v1.RendererService.Query:output_type -> renderer.v1.QueryResponse
+	5, // 0: renderer.v1.RenderRequest.files:type_name -> renderer.v1.RenderRequest.FilesEntry
+	6, // 1: renderer.v1.QueryRequest.files:type_name -> renderer.v1.QueryRequest.FilesEntry
+	1, // 2: renderer.v1.RendererService.Render:input_type -> renderer.v1.RenderRequest
+	3, // 3: renderer.v1.RendererService.Query:input_type -> renderer.v1.QueryRequest
+	2, // 4: renderer.v1.RendererService.Render:output_type -> renderer.v1.RenderResponse
+	4, // 5: renderer.v1.RendererService.Query:output_type -> renderer.v1.QueryResponse
 	4, // [4:6] is the sub-list for method output_type
 	2, // [2:4] is the sub-list for method input_type
 	2, // [2:2] is the sub-list for extension type_name
@@ -334,13 +405,14 @@ func file_internal_renderer_proto_renderer_v1_renderer_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_internal_renderer_proto_renderer_v1_renderer_proto_rawDesc), len(file_internal_renderer_proto_renderer_v1_renderer_proto_rawDesc)),
-			NumEnums:      0,
+			NumEnums:      1,
 			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
 		GoTypes:           file_internal_renderer_proto_renderer_v1_renderer_proto_goTypes,
 		DependencyIndexes: file_internal_renderer_proto_renderer_v1_renderer_proto_depIdxs,
+		EnumInfos:         file_internal_renderer_proto_renderer_v1_renderer_proto_enumTypes,
 		MessageInfos:      file_internal_renderer_proto_renderer_v1_renderer_proto_msgTypes,
 	}.Build()
 	File_internal_renderer_proto_renderer_v1_renderer_proto = out.File

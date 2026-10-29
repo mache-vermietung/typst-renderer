@@ -2,10 +2,11 @@ package renderer_test
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"strings"
-	"sync"
 	"testing"
+	"time"
 
 	grpccodes "google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -77,13 +78,37 @@ func TestServer_Render_Success(t *testing.T) {
 	}
 }
 
+// assertStatus checks code and ErrorReason of err and that the message contains wantSub.
+func assertStatus(t *testing.T, err error, wantCode grpccodes.Code, wantReason rendererv1.ErrorReason, wantSub string) {
+	t.Helper()
+
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	st := status.Convert(err)
+	if st.Code() != wantCode {
+		t.Errorf("expected code %v, got %v (msg: %s)", wantCode, st.Code(), st.Message())
+	}
+
+	if reason := rendererv1.ReasonOf(st); reason != wantReason {
+		t.Errorf("expected reason %v, got %v", wantReason, reason)
+	}
+
+	if !strings.Contains(st.Message(), wantSub) {
+		t.Errorf("error %q should contain %q", st.Message(), wantSub)
+	}
+}
+
 func TestServer_Render_ValidationErrors(t *testing.T) {
 	srv := newTestServer(t)
+
+	invalidBundle := rendererv1.ErrorReason_ERROR_REASON_INVALID_BUNDLE
 
 	tests := []struct {
 		name       string
 		req        *rendererv1.RenderRequest
-		wantCode   grpccodes.Code
+		wantReason rendererv1.ErrorReason
 		wantErrSub string
 		needsTypst bool
 	}{
@@ -93,7 +118,7 @@ func TestServer_Render_ValidationErrors(t *testing.T) {
 				Entrypoint: "",
 				Files:      map[string][]byte{"main.typ": []byte("= Test")},
 			},
-			wantCode:   grpccodes.InvalidArgument,
+			wantReason: invalidBundle,
 			wantErrSub: "entrypoint is required",
 		},
 		{
@@ -102,8 +127,26 @@ func TestServer_Render_ValidationErrors(t *testing.T) {
 				Entrypoint: "other.typ",
 				Files:      map[string][]byte{"main.typ": []byte("= Test")},
 			},
-			wantCode:   grpccodes.InvalidArgument,
+			wantReason: invalidBundle,
 			wantErrSub: "not found in files",
+		},
+		{
+			name: "entrypoint with surrounding whitespace is not looked up trimmed",
+			req: &rendererv1.RenderRequest{
+				Entrypoint: " main.typ",
+				Files:      map[string][]byte{"main.typ": []byte("= Test")},
+			},
+			wantReason: invalidBundle,
+			wantErrSub: "not found in files",
+		},
+		{
+			name: "absolute entrypoint",
+			req: &rendererv1.RenderRequest{
+				Entrypoint: "/main.typ",
+				Files:      map[string][]byte{"/main.typ": []byte("= Test")},
+			},
+			wantReason: invalidBundle,
+			wantErrSub: "invalid entrypoint path",
 		},
 		{
 			name: "path traversal in file key",
@@ -114,8 +157,30 @@ func TestServer_Render_ValidationErrors(t *testing.T) {
 					"../secret.txt": []byte("bad"),
 				},
 			},
-			wantCode:   grpccodes.InvalidArgument,
+			wantReason: invalidBundle,
 			wantErrSub: "invalid file path",
+		},
+		{
+			name: "nested path traversal in file key",
+			req: &rendererv1.RenderRequest{
+				Entrypoint: "main.typ",
+				Files: map[string][]byte{
+					"main.typ":           []byte("= Test"),
+					"assets/../../x.txt": []byte("bad"),
+				},
+			},
+			wantReason: invalidBundle,
+			wantErrSub: "invalid file path",
+		},
+		{
+			name: "unsupported pdf standard",
+			req: &rendererv1.RenderRequest{
+				Entrypoint:  "main.typ",
+				Files:       map[string][]byte{"main.typ": []byte("= Test")},
+				PdfStandard: "--input=x",
+			},
+			wantReason: invalidBundle,
+			wantErrSub: "unsupported pdf standard",
 		},
 		{
 			name: "typst compile error",
@@ -125,8 +190,8 @@ func TestServer_Render_ValidationErrors(t *testing.T) {
 					"main.typ": []byte("#invalid_syntax{{{"),
 				},
 			},
-			wantCode:   grpccodes.InvalidArgument,
-			wantErrSub: "compilation failed",
+			wantReason: rendererv1.ErrorReason_ERROR_REASON_COMPILE_FAILED,
+			wantErrSub: "typst compile failed",
 			needsTypst: true,
 		},
 	}
@@ -138,18 +203,7 @@ func TestServer_Render_ValidationErrors(t *testing.T) {
 			}
 
 			_, err := srv.Render(context.Background(), tt.req)
-			if err == nil {
-				t.Fatal("expected error, got nil")
-			}
-
-			st := status.Convert(err)
-			if st.Code() != tt.wantCode {
-				t.Errorf("expected code %v, got %v (msg: %s)", tt.wantCode, st.Code(), st.Message())
-			}
-
-			if !strings.Contains(st.Message(), tt.wantErrSub) {
-				t.Errorf("error %q should contain %q", st.Message(), tt.wantErrSub)
-			}
+			assertStatus(t, err, grpccodes.InvalidArgument, tt.wantReason, tt.wantErrSub)
 		})
 	}
 }
@@ -167,14 +221,7 @@ func TestServer_Render_RequestTooLarge(t *testing.T) {
 	}
 
 	_, err := srv.Render(context.Background(), req)
-	if err == nil {
-		t.Fatal("expected error, got nil")
-	}
-
-	st := status.Convert(err)
-	if st.Code() != grpccodes.ResourceExhausted {
-		t.Errorf("expected ResourceExhausted, got %v", st.Code())
-	}
+	assertStatus(t, err, grpccodes.ResourceExhausted, rendererv1.ErrorReason_ERROR_REASON_REQUEST_TOO_LARGE, "exceeds limit")
 }
 
 func TestServer_Render_ConcurrencyLimit(t *testing.T) {
@@ -184,34 +231,146 @@ func TestServer_Render_ConcurrencyLimit(t *testing.T) {
 
 	req := &rendererv1.RenderRequest{
 		Entrypoint: "main.typ",
+		Files:      map[string][]byte{"main.typ": []byte("= Concurrent Test")},
+	}
+
+	release := srv.OccupySlots(1)
+
+	_, err := srv.Render(context.Background(), req)
+	assertStatus(t, err, grpccodes.ResourceExhausted, rendererv1.ErrorReason_ERROR_REASON_CONCURRENCY_LIMIT, "concurrency limit")
+
+	_, err = srv.Query(context.Background(), &rendererv1.QueryRequest{Entrypoint: "main.typ", Files: req.GetFiles(), Selector: "<x>"})
+	assertStatus(t, err, grpccodes.ResourceExhausted, rendererv1.ErrorReason_ERROR_REASON_CONCURRENCY_LIMIT, "concurrency limit")
+
+	release()
+
+	// The slot of a finished (here: rejected) request is free again.
+	requireTypst(t)
+
+	if _, err := srv.Render(context.Background(), req); err != nil {
+		t.Fatalf("expected render after release to succeed, got %v", err)
+	}
+}
+
+func TestServer_Render_TimeoutLeavesNoWorkDirectory(t *testing.T) {
+	requireTypst(t)
+
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+
+	srv := newTestServer(t, func(c *renderer.Config) {
+		c.MaxTimeoutSeconds = 1
+	})
+
+	req := &rendererv1.RenderRequest{
+		Entrypoint: "main.typ",
 		Files: map[string][]byte{
-			"main.typ": []byte("= Concurrent Test"),
+			"main.typ": []byte("#let x = 0\n#for i in range(1000000000) { x += 1 }\n#x\n"),
 		},
 	}
 
-	var wg sync.WaitGroup
+	start := time.Now()
 
-	var errExhausted bool
+	_, err := srv.Render(context.Background(), req)
+	assertStatus(t, err, grpccodes.DeadlineExceeded, rendererv1.ErrorReason_ERROR_REASON_TIMEOUT, "timed out")
 
-	var mu sync.Mutex
-
-	for range 5 {
-		wg.Go(func() {
-			_, err := srv.Render(context.Background(), req)
-			if err != nil {
-				st := status.Convert(err)
-				if st.Code() == grpccodes.ResourceExhausted {
-					mu.Lock()
-					errExhausted = true
-					mu.Unlock()
-				}
-			}
-		})
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("expected the compiler to be killed shortly after the timeout, took %s", elapsed)
 	}
 
-	wg.Wait()
+	entries, err := os.ReadDir(tmp)
+	if err != nil {
+		t.Fatalf("failed to read temp dir: %v", err)
+	}
 
-	_ = errExhausted
+	if len(entries) != 0 {
+		t.Errorf("expected no leftover work directories, found %d entries", len(entries))
+	}
+}
+
+func TestServer_Render_GRPCDeadlineBoundsTimeout(t *testing.T) {
+	requireTypst(t)
+
+	srv := newTestServer(t, func(c *renderer.Config) {
+		c.MaxTimeoutSeconds = 30
+	})
+
+	req := &rendererv1.RenderRequest{
+		Entrypoint: "main.typ",
+		Files: map[string][]byte{
+			"main.typ": []byte("#let x = 0\n#for i in range(1000000000) { x += 1 }\n#x\n"),
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+
+	_, err := srv.Render(ctx, req)
+	assertStatus(t, err, grpccodes.DeadlineExceeded, rendererv1.ErrorReason_ERROR_REASON_TIMEOUT, "timed out")
+
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("expected the caller's deadline to bound the compilation, took %s", elapsed)
+	}
+}
+
+func TestServer_Render_CanceledByCaller(t *testing.T) {
+	requireTypst(t)
+
+	srv := newTestServer(t)
+
+	req := &rendererv1.RenderRequest{
+		Entrypoint: "main.typ",
+		Files: map[string][]byte{
+			"main.typ": []byte("#let x = 0\n#for i in range(1000000000) { x += 1 }\n#x\n"),
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(200*time.Millisecond, cancel)
+
+	_, err := srv.Render(ctx, req)
+	if code := status.Code(err); code != grpccodes.Canceled {
+		t.Fatalf("expected Canceled, got %v (%v)", code, err)
+	}
+}
+
+// A package that is not vendored must not be downloaded: the renderer has no egress, and typst's
+// HTTP(S) traffic is routed to an unreachable proxy.
+func TestServer_Render_NonVendoredPackageFails(t *testing.T) {
+	requireTypst(t)
+
+	srv := newTestServer(t)
+
+	req := &rendererv1.RenderRequest{
+		Entrypoint: "main.typ",
+		Files: map[string][]byte{
+			"main.typ": []byte("#import \"@preview/domio-not-vendored:0.1.0\": *\n= Test\n"),
+		},
+	}
+
+	_, err := srv.Render(context.Background(), req)
+	assertStatus(t, err, grpccodes.InvalidArgument, rendererv1.ErrorReason_ERROR_REASON_COMPILE_FAILED, "download")
+}
+
+func TestServer_Render_PDFStandard(t *testing.T) {
+	requireTypst(t)
+
+	srv := newTestServer(t)
+
+	resp, err := srv.Render(context.Background(), &rendererv1.RenderRequest{
+		Entrypoint:  "main.typ",
+		Files:       map[string][]byte{"main.typ": []byte("= Archiv")},
+		PdfStandard: "a-2b",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !strings.Contains(string(resp.GetPdf()), "pdfaid") {
+		t.Errorf("expected PDF/A identification in the output")
+	}
 }
 
 func TestServer_Query(t *testing.T) {
