@@ -2,6 +2,7 @@ package renderer_test
 
 import (
 	"context"
+	"os/exec"
 	"strings"
 	"sync"
 	"testing"
@@ -13,16 +14,29 @@ import (
 	rendererv1 "github.com/tobima/domio/internal/renderer/proto/renderer/v1"
 )
 
-func newTestServer(t *testing.T, modifyCfg ...func(*renderer.Config)) *renderer.Server {
+// requireTypst skips tests that run the real compiler when no typst binary is installed.
+func requireTypst(t *testing.T) {
 	t.Helper()
 
-	cfg := renderer.Config{
+	if _, err := exec.LookPath("typst"); err != nil {
+		t.Skip("typst binary not found in PATH")
+	}
+}
+
+func testConfig() renderer.Config {
+	return renderer.Config{
 		MaxRequestBytes:   1024 * 1024,
 		MaxConcurrency:    2,
 		MaxTimeoutSeconds: 5,
 		TypstBinaryPath:   "typst",
-		PackagePath:       "../../document/packages",
+		PackagePath:       "../document/packages",
 	}
+}
+
+func newTestServer(t *testing.T, modifyCfg ...func(*renderer.Config)) *renderer.Server {
+	t.Helper()
+
+	cfg := testConfig()
 
 	for _, m := range modifyCfg {
 		m(&cfg)
@@ -37,6 +51,8 @@ func newTestServer(t *testing.T, modifyCfg ...func(*renderer.Config)) *renderer.
 }
 
 func TestServer_Render_Success(t *testing.T) {
+	requireTypst(t)
+
 	srv := newTestServer(t)
 
 	req := &rendererv1.RenderRequest{
@@ -69,6 +85,7 @@ func TestServer_Render_ValidationErrors(t *testing.T) {
 		req        *rendererv1.RenderRequest
 		wantCode   grpccodes.Code
 		wantErrSub string
+		needsTypst bool
 	}{
 		{
 			name: "missing entrypoint",
@@ -110,11 +127,16 @@ func TestServer_Render_ValidationErrors(t *testing.T) {
 			},
 			wantCode:   grpccodes.InvalidArgument,
 			wantErrSub: "compilation failed",
+			needsTypst: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.needsTypst {
+				requireTypst(t)
+			}
+
 			_, err := srv.Render(context.Background(), tt.req)
 			if err == nil {
 				t.Fatal("expected error, got nil")
@@ -193,6 +215,8 @@ func TestServer_Render_ConcurrencyLimit(t *testing.T) {
 }
 
 func TestServer_Query(t *testing.T) {
+	requireTypst(t)
+
 	srv := newTestServer(t)
 
 	req := &rendererv1.QueryRequest{

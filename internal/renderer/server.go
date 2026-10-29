@@ -12,6 +12,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
+	"google.golang.org/grpc"
 	grpccodes "google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -19,7 +20,26 @@ import (
 	rendererv1 "github.com/tobima/domio/internal/renderer/proto/renderer/v1"
 )
 
-const tracerName = "domio/renderer"
+const (
+	tracerName = "domio/renderer"
+	// messageOverheadBytes is the headroom on top of the payload limits for the protobuf framing
+	// (field tags, lengths, map keys).
+	messageOverheadBytes = 1 << 20
+)
+
+// GRPCServerOptions aligns the gRPC message size limits with the configured request limit and the
+// typst output limit. Without them gRPC rejects every message above 4 MiB before the handler runs.
+func GRPCServerOptions(cfg Config) []grpc.ServerOption {
+	maxRequest := cfg.MaxRequestBytes
+	if maxRequest <= 0 {
+		maxRequest = DefaultMaxRequestBytes
+	}
+
+	return []grpc.ServerOption{
+		grpc.MaxRecvMsgSize(int(maxRequest + messageOverheadBytes)),
+		grpc.MaxSendMsgSize(int(typst.DefaultMaxOutputBytes + messageOverheadBytes)),
+	}
+}
 
 var (
 	// ErrEntrypointRequired is returned when the entrypoint file path is empty.

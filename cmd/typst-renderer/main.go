@@ -54,7 +54,7 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
-	grpcSrv := grpcserver.New(cfg.ListenAddr)
+	grpcSrv := grpcserver.New(cfg.ListenAddr, renderer.GRPCServerOptions(cfg)...)
 	rendererv1.RegisterRendererServiceServer(grpcSrv.GRPCServer(), srv)
 
 	errCh := make(chan error, 1)
