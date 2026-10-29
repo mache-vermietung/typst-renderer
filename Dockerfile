@@ -1,12 +1,15 @@
-# Stage 1: Build the static Go binary
-FROM golang:1.26-trixie AS go-builder
+# Stage 1: Build the static Go binary (on the build platform, cross-compiled for the target)
+FROM --platform=$BUILDPLATFORM golang:1.26-trixie AS go-builder
+
+ARG TARGETOS
+ARG TARGETARCH
 
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /bin/renderer ./cmd/renderer
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -trimpath -ldflags="-s -w" -o /bin/renderer ./cmd/renderer
 
 # Stage 2: Fetch and verify pinned Typst binary
 FROM debian:trixie-slim AS typst-fetcher
@@ -21,7 +24,7 @@ ARG TARGETARCH
 COPY build/typst.version /tmp/typst.version
 
 RUN TYPST_VERSION=$(cat /tmp/typst.version | tr -d '\r\n') && \
-    ARCH=$(dpkg --print-architecture) && \
+    ARCH=${TARGETARCH:-$(dpkg --print-architecture)} && \
     case "$ARCH" in \
         amd64|x86_64) \
             TAR_NAME="typst-x86_64-unknown-linux-musl.tar.xz" && \
@@ -43,7 +46,8 @@ RUN TYPST_VERSION=$(cat /tmp/typst.version | tr -d '\r\n') && \
     tar -xf "/tmp/${TAR_NAME}" -C /tmp && \
     DIR_NAME="${TAR_NAME%.tar.xz}" && \
     mv "/tmp/${DIR_NAME}/typst" /bin/typst && \
-    chmod +x /bin/typst
+    chmod +x /bin/typst && \
+    mkdir -p /fonts
 
 # Stage 3: Minimal, isolated runtime container
 FROM gcr.io/distroless/static-debian12:nonroot
@@ -52,8 +56,9 @@ WORKDIR /
 COPY --from=go-builder /bin/renderer /bin/renderer
 COPY --from=typst-fetcher /bin/typst /bin/typst
 
-# Vendored packages and empty fonts dir
+# Vendored packages and the (still empty) font directory for --font-path
 COPY internal/document/packages /packages
+COPY --from=typst-fetcher /fonts /fonts
 USER nonroot:nonroot
 
 ENV RENDERER_LISTEN_ADDR=":9100" \
