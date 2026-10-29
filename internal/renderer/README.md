@@ -23,19 +23,36 @@ Definiert in `internal/renderer/proto/renderer/v1/renderer.proto`.
 ### Methoden
 
 - **`Render(RenderRequest) returns (RenderResponse)`**
-  Kompiliert das übergebene Bundle (`entrypoint`, Quelldateien als `files`-Map und `data_json`) zu einem PDF.
+  Kompiliert das übergebene Bundle (`entrypoint`, Quelldateien als `files`-Map und `data_json`) zu einem PDF. Optional erzwingt `pdf_standard` einen PDF-Standard (z. B. `a-2b` für PDF/A-2b, mehrere kommagetrennt); erlaubt sind nur die Werte von `typst compile --pdf-standard`.
 - **`Query(QueryRequest) returns (QueryResponse)`**
   Führt eine Typst-Query (z. B. zur Metadaten-Extraktion in Golden-File-Tests) auf dem Bundle aus und liefert die Treffer als JSON.
 
 ### Status-Codes
 
-| Code | Ursache |
-| :--- | :--- |
-| `OK` | Erfolgreich gerendert |
-| `InvalidArgument` | Ungültiges Bundle (z. B. fehlender Entrypoint, Pfadtraversierung) oder Typst-Kompilierfehler mit Fehlermeldung |
-| `ResourceExhausted` | Maximale Request-Größe (`RENDERER_MAX_REQUEST_BYTES`) oder maximale Parallelität (`RENDERER_MAX_CONCURRENCY`) überschritten |
-| `DeadlineExceeded` | Timeout während der Kompilierung (`RENDERER_MAX_TIMEOUT_SECONDS` oder gRPC-Deadline) |
-| `Unavailable` | Dienst nicht erreichbar |
+Jeder Fehler-Status trägt zusätzlich ein `google.rpc.ErrorInfo` (Domain `renderer.domio`) mit einem `ErrorReason` aus dem Proto, damit Clients Fehler mit gleichem gRPC-Code unterscheiden können (Helfer: `rendererv1.NewStatusError`, `rendererv1.ReasonOf`).
+
+| Code | `ErrorReason` | Ursache | API (`GRPCRenderer`) |
+| :--- | :--- | :--- | :--- |
+| `OK` | – | Erfolgreich gerendert | – |
+| `InvalidArgument` | `INVALID_BUNDLE` | Ungültiges Bundle (fehlender Entrypoint, Pfad außerhalb des Roots, unbekannter PDF-Standard, leerer Selector) | `ErrInvalidBundle` |
+| `InvalidArgument` | `COMPILE_FAILED` | Typst-Kompilierfehler; die Nachricht enthält die Diagnose (auch: nicht vendortes Paket, Download schlägt fehl) | `ErrRenderFailed` + `typst.ErrCompileFailed` |
+| `DeadlineExceeded` | `TIMEOUT` | Timeout = min(gRPC-Deadline, `RENDERER_MAX_TIMEOUT_SECONDS`) | `ErrRenderFailed` + `typst.ErrCompileTimeout` |
+| `ResourceExhausted` | `REQUEST_TOO_LARGE` | Request größer als `RENDERER_MAX_REQUEST_BYTES` | `ErrRenderFailed` |
+| `ResourceExhausted` | `OUTPUT_TOO_LARGE` | Ausgabe größer als das Typst-Limit (64 MiB) | `ErrRenderFailed` + `typst.ErrOutputTooLarge` |
+| `ResourceExhausted` | `CONCURRENCY_LIMIT` | Alle `RENDERER_MAX_CONCURRENCY` Slots belegt (kein Warten, sofortige Ablehnung) | `ErrRendererUnavailable` (HTTP `503`, River-Retry) |
+| `Canceled` | – | Der Aufrufer hat den Request abgebrochen | `ErrRenderFailed` |
+| `Unavailable` | – | Dienst nicht erreichbar | `ErrRendererUnavailable` (HTTP `503`) |
+
+Die API bildet die Fehler damit auf dieselben Domain-Fehler und Typst-Ursachen ab wie der lokale Adapter.
+
+Die gRPC-Nachrichtengrößen sind an die Limits gekoppelt (`renderer.GRPCServerOptions`): Der Server nimmt Requests bis `RENDERER_MAX_REQUEST_BYTES` + 1 MiB Protobuf-Overhead an und sendet Antworten bis 64 MiB + 1 MiB; der API-Client akzeptiert Antworten in derselben Größe. Ohne diese Optionen gilt gRPCs Default von 4 MiB.
+
+### Logging & Tracing
+
+Typst-Diagnosen können Template-Quelltext und Daten (personenbezogen) zitieren. Sie stehen deshalb nur in der Status-Nachricht an den Aufrufer und im Error-Event des Spans (wie beim lokalen Adapter), nicht im Log und nicht im Span-Status. Logs enthalten Methode, Code, `ErrorReason`, Request-/Response-Größe und Dauer.
+
+> [!NOTE]
+> Traces und Metriken des Renderers erreichen derzeit keinen Collector: Das interne Netz hat keinen Egress und es ist noch kein `MeterProvider` konfiguriert. Siehe Backlog „Telemetrie des Renderer-Dienstes: interner Telemetrie-Proxy“.
 
 ---
 
@@ -57,11 +74,29 @@ Definiert in `internal/renderer/proto/renderer/v1/renderer.proto`.
 
 Das Multi-Stage-Dockerfile befindet sich unter `build/renderer/Dockerfile`.
 
-### Container starten (Devcontainer)
+### Devcontainer
+
+Der Service `renderer` ist in `.devcontainer/docker-compose.yml` definiert und hängt nur am Netz `renderer_internal` (`internal: true`). Die API läuft im Devcontainer-Service selbst, der **zusätzlich** an `renderer_internal` hängt und am Default-Netz bleibt (Egress für Go-Module, pnpm, JWKS).
+
+> [!IMPORTANT]
+> Die Netz- und Service-Änderung wirkt erst nach einmaligem **„Dev Containers: Rebuild Container“**. Vorher ist `renderer:9100` nicht auflösbar, und die Dokumenterzeugung liefert `503`.
+
 ```bash
-docker compose up -d renderer
+docker compose up -d renderer   # Renderer (neu) bauen und starten
 ```
 
-> [!NOTE]
-> Die API nutzt standardmäßig `DOCUMENT_RENDERER=grpc` mit `DOCUMENT_RENDERER_ADDR=renderer:9100`.
-> Für die rein lokale Entwicklung ohne Container kann in `.env` `DOCUMENT_RENDERER=local` gesetzt werden.
+Die API nutzt standardmäßig `DOCUMENT_RENDERER=grpc` mit `DOCUMENT_RENDERER_ADDR=renderer:9100`. Für die lokale Entwicklung ohne Renderer-Container (z. B. vor dem Rebuild) `DOCUMENT_RENDERER=local` in `.env` setzen; dann kompiliert die API selbst mit dem Typst aus dem Devcontainer (Warn-Log beim Start).
+
+---
+
+## ⬆️ Typst-Upgrade
+
+Die Typst-Version steht ausschließlich in `build/typst.version`. Für ein Upgrade:
+
+1. `build/typst.version` auf die neue Version setzen.
+2. Die SHA-256-Prüfsummen der Release-Archive (`typst-x86_64-unknown-linux-musl.tar.xz`, `typst-aarch64-unknown-linux-musl.tar.xz`) von der GitHub-Release-Seite übernehmen — in `build/renderer/Dockerfile` **und** `.devcontainer/setup.sh` (beide prüfen die Checksumme und brechen bei Abweichung ab).
+3. Devcontainer neu bauen bzw. `.devcontainer/setup.sh` ausführen, damit lokal dieselbe Version läuft (der Golden-Helper bricht bei abweichender Version ab).
+4. Changelog auf Breaking Changes prüfen, v. a. für die vendorten Pakete unter `internal/document/packages` (z. B. `cmarker`) und die eingebauten Schriften.
+5. Golden-Dateien neu erzeugen und die Diffs sichten: `go test ./internal/document/... -update`.
+6. Tests: `go test ./internal/infrastructure/typst/... ./internal/renderer/... ./internal/document/...`.
+7. Renderer-Image neu bauen und deployen (`docker compose up -d --build renderer`).
