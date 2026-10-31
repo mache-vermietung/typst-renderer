@@ -21,7 +21,7 @@ func TestCheckBinary(t *testing.T) {
 		t.Fatalf("unexpected error checking typst binary: %v", err)
 	}
 
-	if len(version) == 0 {
+	if version == "" {
 		t.Errorf("expected non-empty version string")
 	}
 

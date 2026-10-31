@@ -42,8 +42,8 @@ func run(logger *slog.Logger) error {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 
-		if err := tp.Shutdown(shutdownCtx); err != nil {
-			logger.Warn("error shutting down tracer", "error", err)
+		if shutdownErr := tp.Shutdown(shutdownCtx); shutdownErr != nil {
+			logger.Warn("error shutting down tracer", "error", shutdownErr)
 		}
 	}()
 

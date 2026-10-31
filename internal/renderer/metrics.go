@@ -66,7 +66,7 @@ func NewMetrics() (*Metrics, error) {
 	}, nil
 }
 
-func (m *Metrics) recordRequest(ctx context.Context, method string, code string, durationSec float64, inBytes int64, outBytes int64) {
+func (m *Metrics) recordRequest(ctx context.Context, method, code string, durationSec float64, inBytes, outBytes int64) {
 	if m == nil {
 		return
 	}

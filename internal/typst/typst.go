@@ -193,8 +193,8 @@ func runInSandbox(
 		return nil, err
 	}
 
-	if err := writeBundleFiles(rootDir, input); err != nil {
-		return nil, err
+	if writeBundleFilesErr := writeBundleFiles(rootDir, input); writeBundleFilesErr != nil {
+		return nil, writeBundleFilesErr
 	}
 
 	args, outputFile := buildArgs(sandbox{
