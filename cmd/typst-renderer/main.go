@@ -11,13 +11,21 @@ import (
 
 	"github.com/joho/godotenv"
 
-	"github.com/tobima/domio/internal/infrastructure/grpcserver"
 	"github.com/tobima/domio/internal/infrastructure/telemetry"
 	"github.com/tobima/domio/internal/renderer"
-	rendererv1 "github.com/tobima/domio/internal/renderer/proto/renderer/v1"
 )
 
 func main() {
+	// `renderer healthcheck` is the container healthcheck of the distroless image (no shell, no
+	// grpc_health_probe): it checks the running daemon via grpc.health.v1 and exits 0/1.
+	if len(os.Args) > 1 && os.Args[1] == renderer.HealthProbeCommand {
+		if err := renderer.RunHealthProbe(context.Background(), renderer.LoadConfigFromEnv()); err != nil {
+			os.Exit(1)
+		}
+
+		os.Exit(0)
+	}
+
 	logger := telemetry.InitLogger()
 
 	if err := run(logger); err != nil {
@@ -54,8 +62,7 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
-	grpcSrv := grpcserver.New(cfg.ListenAddr, renderer.GRPCServerOptions(cfg)...)
-	rendererv1.RegisterRendererServiceServer(grpcSrv.GRPCServer(), srv)
+	grpcSrv := renderer.NewGRPCServer(cfg, srv)
 
 	errCh := make(chan error, 1)
 

@@ -47,6 +47,10 @@ Die API bildet die Fehler damit auf dieselben Domain-Fehler und Typst-Ursachen a
 
 Die gRPC-Nachrichtengrößen sind an die Limits gekoppelt (`renderer.GRPCServerOptions`): Der Server nimmt Requests bis `RENDERER_MAX_REQUEST_BYTES` + 1 MiB Protobuf-Overhead an und sendet Antworten bis 64 MiB + 1 MiB; der API-Client akzeptiert Antworten in derselben Größe. Ohne diese Optionen gilt gRPCs Default von 4 MiB.
 
+### Health-Check
+
+Der Dienst implementiert `grpc.health.v1` (`renderer.NewGRPCServer`): `SERVING` für den gesamten Server (`""`) und für `renderer.v1.RendererService`, `NOT_SERVING` beim Herunterfahren. Die API nutzt denselben Check für `/readyz`. Für den Docker-Healthcheck des distroless Images prüft sich das Binary selbst: `/bin/renderer healthcheck` (Exit-Code `0`/`1`, Ziel `127.0.0.1:<Port aus RENDERER_LISTEN_ADDR>`).
+
 ### Logging & Tracing
 
 Typst-Diagnosen können Template-Quelltext und Daten (personenbezogen) zitieren. Sie stehen deshalb nur in der Status-Nachricht an den Aufrufer und im Error-Event des Spans (wie beim lokalen Adapter), nicht im Log und nicht im Span-Status. Logs enthalten Methode, Code, `ErrorReason`, Request-/Response-Größe und Dauer.
