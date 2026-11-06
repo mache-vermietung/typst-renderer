@@ -55,6 +55,13 @@ func run(logger *slog.Logger) error {
 		}
 	}()
 
+	shutdownMeter, err := initMetrics(ctx, logger)
+	if err != nil {
+		return err
+	}
+
+	defer shutdownMeter(ctx)
+
 	cfg := renderer.LoadConfigFromEnv()
 
 	srv, err := renderer.NewServer(cfg)
@@ -100,4 +107,22 @@ func run(logger *slog.Logger) error {
 
 		return nil
 	}
+}
+
+// initMetrics sets up the meter provider for the renderer's own instruments (requests, duration,
+// sizes, errors via status_code); a no-op without OTLP endpoint.
+func initMetrics(ctx context.Context, logger *slog.Logger) (func(context.Context), error) {
+	shutdownMeter, err := telemetry.InitMeterProvider(ctx, "domio-renderer")
+	if err != nil {
+		return nil, err
+	}
+
+	return func(ctx context.Context) {
+		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+		defer cancel()
+
+		if shutdownErr := shutdownMeter(shutdownCtx); shutdownErr != nil {
+			logger.Warn("error shutting down meter provider", "error", shutdownErr)
+		}
+	}, nil
 }

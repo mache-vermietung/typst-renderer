@@ -6,9 +6,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/propagation"
-	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
 
 // InitTracer initializes tracing for the "domio-api" service.
@@ -26,13 +24,7 @@ func InitTracerForService(ctx context.Context, serviceName string) (*sdktrace.Tr
 	}
 
 	// 2. Resource liest automatisch OTEL_SERVICE_NAME und OTEL_RESOURCE_ATTRIBUTES
-	res, err := resource.New(ctx,
-		resource.WithFromEnv(), // Liest Umgebungsvariablen
-		resource.WithAttributes(
-			semconv.ServiceNameKey.String(serviceName),
-			semconv.ServiceVersionKey.String("0.1.0"),
-		),
-	)
+	res, err := serviceResource(ctx, serviceName)
 	if err != nil {
 		return nil, err
 	}
