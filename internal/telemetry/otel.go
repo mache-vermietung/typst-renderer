@@ -9,27 +9,22 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
-// InitTracer initializes tracing for the "domio-api" service.
-func InitTracer(ctx context.Context) (*sdktrace.TracerProvider, error) {
-	return InitTracerForService(ctx, "domio-api")
-}
-
-// InitTracerForService initializes tracing for the given service name, so that
-// additional binaries (e.g. cmd/portal-bff) show up distinctly in traces.
+// InitTracerForService initializes tracing for the given service name. The OTLP exporter and the
+// resource are configured through the standard OTEL_* environment variables.
 func InitTracerForService(ctx context.Context, serviceName string) (*sdktrace.TracerProvider, error) {
-	// 1. Der Exporter liest automatisch OTEL_EXPORTER_OTLP_ENDPOINT etc
+	// The exporter reads OTEL_EXPORTER_OTLP_ENDPOINT and related variables itself.
 	exporter, err := otlptracehttp.New(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	// 2. Resource liest automatisch OTEL_SERVICE_NAME und OTEL_RESOURCE_ATTRIBUTES
+	// The resource honours OTEL_SERVICE_NAME and OTEL_RESOURCE_ATTRIBUTES.
 	res, err := serviceResource(ctx, serviceName)
 	if err != nil {
 		return nil, err
 	}
 
-	// 3. Provider zusammenbauen
+	// Assemble the provider.
 	tp := sdktrace.NewTracerProvider(
 		sdktrace.WithBatcher(exporter),
 		sdktrace.WithResource(res),

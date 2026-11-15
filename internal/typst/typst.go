@@ -179,7 +179,7 @@ func runInSandbox(
 		return nil, err
 	}
 
-	workDir, err := os.MkdirTemp("", "domio-typst-*")
+	workDir, err := os.MkdirTemp("", "typst-renderer-*")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create temp directory: %w", err)
 	}

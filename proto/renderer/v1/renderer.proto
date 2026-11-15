@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package renderer.v1;
 
-option go_package = "github.com/tobima/domio/internal/renderer/proto/renderer/v1;rendererv1";
+option go_package = "github.com/mache-vermietung/typst-renderer/proto/renderer/v1;rendererv1";
 
 service RendererService {
   rpc Render(RenderRequest) returns (RenderResponse);
@@ -35,7 +35,7 @@ message QueryResponse {
   bytes data_json = 1;
 }
 
-// ErrorReason is sent as google.rpc.ErrorInfo.reason (domain "renderer.domio") with every error
+// ErrorReason is sent as google.rpc.ErrorInfo.reason (domain "typst-renderer") with every error
 // status, so clients can tell failures apart that share a gRPC code.
 enum ErrorReason {
   ERROR_REASON_UNSPECIFIED = 0;

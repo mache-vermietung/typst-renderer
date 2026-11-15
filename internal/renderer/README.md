@@ -29,7 +29,7 @@ Definiert in `internal/renderer/proto/renderer/v1/renderer.proto`.
 
 ### Status-Codes
 
-Jeder Fehler-Status trägt zusätzlich ein `google.rpc.ErrorInfo` (Domain `renderer.domio`) mit einem `ErrorReason` aus dem Proto, damit Clients Fehler mit gleichem gRPC-Code unterscheiden können (Helfer: `rendererv1.NewStatusError`, `rendererv1.ReasonOf`).
+Jeder Fehler-Status trägt zusätzlich ein `google.rpc.ErrorInfo` (Domain `typst-renderer`) mit einem `ErrorReason` aus dem Proto, damit Clients Fehler mit gleichem gRPC-Code unterscheiden können (Helfer: `rendererv1.NewStatusError`, `rendererv1.ReasonOf`).
 
 | Code | `ErrorReason` | Ursache | API (`GRPCRenderer`) |
 | :--- | :--- | :--- | :--- |

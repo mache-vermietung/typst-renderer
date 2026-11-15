@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/health/grpc_health_v1"
 
-	"github.com/tobima/domio/internal/infrastructure/grpcserver"
+	"github.com/mache-vermietung/typst-renderer/internal/grpcserver"
 )
 
 func startServer(t *testing.T) *grpcserver.Server {

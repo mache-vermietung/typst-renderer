@@ -13,9 +13,9 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
-	"github.com/tobima/domio/internal/infrastructure/grpcserver"
-	"github.com/tobima/domio/internal/renderer"
-	rendererv1 "github.com/tobima/domio/internal/renderer/proto/renderer/v1"
+	"github.com/mache-vermietung/typst-renderer/internal/grpcserver"
+	"github.com/mache-vermietung/typst-renderer/internal/renderer"
+	rendererv1 "github.com/mache-vermietung/typst-renderer/proto/renderer/v1"
 )
 
 // newBufconnClient serves srv through grpcserver with the renderer's message size options, so the

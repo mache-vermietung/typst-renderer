@@ -11,7 +11,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/health/grpc_health_v1"
 
-	"github.com/tobima/domio/internal/infrastructure/grpcserver"
+	"github.com/mache-vermietung/typst-renderer/internal/grpcserver"
 )
 
 func TestGRPCServer_HealthCheck(t *testing.T) {

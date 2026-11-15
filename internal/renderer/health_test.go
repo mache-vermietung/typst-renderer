@@ -9,8 +9,8 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/health/grpc_health_v1"
 
-	"github.com/tobima/domio/internal/renderer"
-	rendererv1 "github.com/tobima/domio/internal/renderer/proto/renderer/v1"
+	"github.com/mache-vermietung/typst-renderer/internal/renderer"
+	rendererv1 "github.com/mache-vermietung/typst-renderer/proto/renderer/v1"
 )
 
 func TestProbeAddr(t *testing.T) {

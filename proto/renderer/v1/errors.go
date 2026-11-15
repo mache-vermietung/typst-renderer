@@ -8,7 +8,7 @@ import (
 )
 
 // ErrorInfoDomain is the google.rpc.ErrorInfo domain of the renderer's error reasons.
-const ErrorInfoDomain = "renderer.domio"
+const ErrorInfoDomain = "typst-renderer"
 
 // NewStatusError returns a gRPC status error with the given code and message that carries reason
 // as google.rpc.ErrorInfo. If the detail cannot be attached, the plain status is returned.

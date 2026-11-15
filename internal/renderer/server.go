@@ -16,12 +16,12 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/tobima/domio/internal/infrastructure/typst"
-	rendererv1 "github.com/tobima/domio/internal/renderer/proto/renderer/v1"
+	"github.com/mache-vermietung/typst-renderer/internal/typst"
+	rendererv1 "github.com/mache-vermietung/typst-renderer/proto/renderer/v1"
 )
 
 const (
-	tracerName = "domio/renderer"
+	tracerName = "typst-renderer"
 	// messageOverheadBytes is the headroom on top of the payload limits for the protobuf framing
 	// (field tags, lengths, map keys).
 	messageOverheadBytes = 1 << 20

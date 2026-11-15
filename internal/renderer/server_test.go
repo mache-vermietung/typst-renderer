@@ -11,8 +11,8 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/tobima/domio/internal/renderer"
-	rendererv1 "github.com/tobima/domio/internal/renderer/proto/renderer/v1"
+	"github.com/mache-vermietung/typst-renderer/internal/renderer"
+	rendererv1 "github.com/mache-vermietung/typst-renderer/proto/renderer/v1"
 )
 
 // requireTypst skips tests that run the real compiler when no typst binary is installed.
@@ -346,7 +346,7 @@ func TestServer_Render_NonVendoredPackageFails(t *testing.T) {
 	req := &rendererv1.RenderRequest{
 		Entrypoint: "main.typ",
 		Files: map[string][]byte{
-			"main.typ": []byte("#import \"@preview/domio-not-vendored:0.1.0\": *\n= Test\n"),
+			"main.typ": []byte("#import \"@preview/not-vendored:0.1.0\": *\n= Test\n"),
 		},
 	}
 

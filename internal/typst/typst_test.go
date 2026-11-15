@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tobima/domio/internal/infrastructure/typst"
+	"github.com/mache-vermietung/typst-renderer/internal/typst"
 )
 
 func TestCheckBinary(t *testing.T) {

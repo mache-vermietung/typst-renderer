@@ -9,10 +9,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/joho/godotenv"
-
-	"github.com/tobima/domio/internal/infrastructure/telemetry"
-	"github.com/tobima/domio/internal/renderer"
+	"github.com/mache-vermietung/typst-renderer/internal/renderer"
+	"github.com/mache-vermietung/typst-renderer/internal/telemetry"
 )
 
 func main() {
@@ -37,11 +35,7 @@ func main() {
 func run(logger *slog.Logger) error {
 	ctx := context.Background()
 
-	if err := godotenv.Load(); err != nil {
-		slog.Debug("No .env file found or error loading it")
-	}
-
-	tp, err := telemetry.InitTracerForService(ctx, "domio-renderer")
+	tp, err := telemetry.InitTracerForService(ctx, "typst-renderer")
 	if err != nil {
 		return err
 	}
@@ -112,7 +106,7 @@ func run(logger *slog.Logger) error {
 // initMetrics sets up the meter provider for the renderer's own instruments (requests, duration,
 // sizes, errors via status_code); a no-op without OTLP endpoint.
 func initMetrics(ctx context.Context, logger *slog.Logger) (func(context.Context), error) {
-	shutdownMeter, err := telemetry.InitMeterProvider(ctx, "domio-renderer")
+	shutdownMeter, err := telemetry.InitMeterProvider(ctx, "typst-renderer")
 	if err != nil {
 		return nil, err
 	}

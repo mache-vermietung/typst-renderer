@@ -8,7 +8,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 )
 
-const meterName = "domio/renderer"
+const meterName = "typst-renderer"
 
 // Metrics holds the OpenTelemetry metrics instruments for the renderer service.
 type Metrics struct {

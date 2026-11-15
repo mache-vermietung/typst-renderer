@@ -7,8 +7,8 @@ import (
 
 	"google.golang.org/grpc/health/grpc_health_v1"
 
-	"github.com/tobima/domio/internal/infrastructure/grpcserver"
-	rendererv1 "github.com/tobima/domio/internal/renderer/proto/renderer/v1"
+	"github.com/mache-vermietung/typst-renderer/internal/grpcserver"
+	rendererv1 "github.com/mache-vermietung/typst-renderer/proto/renderer/v1"
 )
 
 // HealthProbeCommand is the argument that turns the renderer binary into a one-shot health

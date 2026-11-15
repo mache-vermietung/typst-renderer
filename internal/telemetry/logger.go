@@ -1,4 +1,4 @@
-// Package telemetry ...
+// Package telemetry sets up logging, tracing and metrics for the renderer daemon.
 package telemetry
 
 import (
