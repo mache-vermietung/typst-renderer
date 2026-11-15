@@ -9,9 +9,9 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -trimpath -ldflags="-s -w" -o /bin/renderer ./cmd/renderer
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -trimpath -ldflags="-s -w" -o /bin/typst-renderer ./cmd/typst-renderer
 
-# Stage 2: Fetch and verify pinned Typst binary
+# Stage 2: Fetch and verify the pinned Typst binary (checksums: build/typst.sha256)
 FROM debian:trixie-slim AS typst-fetcher
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -20,45 +20,28 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-ARG TARGETARCH
-COPY build/typst.version /tmp/typst.version
+COPY build/typst.version build/typst.sha256 /src/build/
+COPY scripts/install-typst.sh /src/scripts/install-typst.sh
 
-RUN TYPST_VERSION=$(cat /tmp/typst.version | tr -d '\r\n') && \
-    ARCH=${TARGETARCH:-$(dpkg --print-architecture)} && \
-    case "$ARCH" in \
-        amd64|x86_64) \
-            TAR_NAME="typst-x86_64-unknown-linux-musl.tar.xz" && \
-            EXPECTED_SHA="a6d077d0a95eed5a2eba715b2dae06be954f624ccbf85758a03f389ded33118c" \
-            ;; \
-        arm64|aarch64) \
-            TAR_NAME="typst-aarch64-unknown-linux-musl.tar.xz" && \
-            EXPECTED_SHA="5aa8d74a3d906e60ea12a66ac2f37f8eef1b14cbad7182a745e393a10c23dcee" \
-            ;; \
-        *) \
-            echo "Unsupported architecture: $ARCH" && exit 1 \
-            ;; \
-    esac && \
-    curl -fsSL "https://github.com/typst/typst/releases/download/v${TYPST_VERSION}/${TAR_NAME}" -o "/tmp/${TAR_NAME}" && \
-    ACTUAL_SHA=$(sha256sum "/tmp/${TAR_NAME}" | awk '{print $1}') && \
-    if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then \
-        echo "Checksum mismatch! Expected $EXPECTED_SHA, got $ACTUAL_SHA" && exit 1; \
-    fi && \
-    tar -xf "/tmp/${TAR_NAME}" -C /tmp && \
-    DIR_NAME="${TAR_NAME%.tar.xz}" && \
-    mv "/tmp/${DIR_NAME}/typst" /bin/typst && \
-    chmod +x /bin/typst && \
-    mkdir -p /fonts
+ARG TARGETARCH
+RUN TYPST_ARCH=${TARGETARCH:-$(dpkg --print-architecture)} /src/scripts/install-typst.sh /out/bin \
+    && mkdir -p /out/packages /out/fonts
 
 # Stage 3: Minimal, isolated runtime container
 FROM gcr.io/distroless/static-debian12:nonroot
 
-WORKDIR /
-COPY --from=go-builder /bin/renderer /bin/renderer
-COPY --from=typst-fetcher /bin/typst /bin/typst
+LABEL org.opencontainers.image.source="https://github.com/mache-vermietung/typst-renderer" \
+      org.opencontainers.image.description="Isolated Typst-to-PDF renderer daemon (gRPC, no network access required)" \
+      org.opencontainers.image.licenses="MIT"
 
-# Vendored packages and the (still empty) font directory for --font-path
-COPY internal/document/packages /packages
-COPY --from=typst-fetcher /fonts /fonts
+WORKDIR /
+COPY --from=go-builder /bin/typst-renderer /bin/typst-renderer
+COPY --from=typst-fetcher /out/bin/typst /bin/typst
+
+# Empty package and font directories: derived images add vendored Typst packages to /packages
+# and fonts to /fonts (typst runs with --package-path / --font-path and never downloads).
+COPY --from=typst-fetcher /out/packages /packages
+COPY --from=typst-fetcher /out/fonts /fonts
 USER nonroot:nonroot
 
 ENV RENDERER_LISTEN_ADDR=":9100" \
@@ -68,4 +51,8 @@ ENV RENDERER_LISTEN_ADDR=":9100" \
 
 EXPOSE 9100
 
-ENTRYPOINT ["/bin/renderer"]
+# Distroless has no shell: the daemon probes grpc.health.v1 on itself.
+HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
+    CMD ["/bin/typst-renderer", "healthcheck"]
+
+ENTRYPOINT ["/bin/typst-renderer"]
