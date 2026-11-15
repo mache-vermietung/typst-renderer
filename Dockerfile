@@ -1,5 +1,5 @@
 # Stage 1: Build the static Go binary (on the build platform, cross-compiled for the target)
-FROM --platform=$BUILDPLATFORM golang:1.26-trixie AS go-builder
+FROM --platform=$BUILDPLATFORM golang:1.27-trixie AS go-builder
 
 ARG TARGETOS
 ARG TARGETARCH
