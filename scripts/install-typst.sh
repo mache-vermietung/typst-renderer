@@ -27,3 +27,8 @@ echo "$expected  $tmp/$archive" | sha256sum -c -
 tar -xf "$tmp/$archive" -C "$tmp"
 mkdir -p "$dest"
 install -m 0755 "$tmp/${archive%.tar.xz}/typst" "$dest/typst"
+
+# Apache-2.0 requires shipping the license text and NOTICE with the binary.
+licenses="$dest/../licenses/typst"
+mkdir -p "$licenses"
+install -m 0644 "$tmp/${archive%.tar.xz}/LICENSE" "$tmp/${archive%.tar.xz}/NOTICE" "$licenses/"

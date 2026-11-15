@@ -38,6 +38,12 @@ WORKDIR /
 COPY --from=go-builder /bin/typst-renderer /bin/typst-renderer
 COPY --from=typst-fetcher /out/bin/typst /bin/typst
 
+# License texts of everything shipped in this image (Typst: Apache-2.0 + NOTICE; Go dependencies:
+# scripts/licenses.sh; own code: MIT).
+COPY --from=typst-fetcher /out/licenses /licenses
+COPY third_party/go-licenses /licenses/go
+COPY LICENSE /licenses/typst-renderer/LICENSE
+
 # Empty package and font directories: derived images add vendored Typst packages to /packages
 # and fonts to /fonts (typst runs with --package-path / --font-path and never downloads).
 COPY --from=typst-fetcher /out/packages /packages

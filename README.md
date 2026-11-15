@@ -166,3 +166,16 @@ Tags are created on commits of `main`: `vX.Y.Z` for a release, `vX.Y.Z-rc.N` for
 tag is the version of the Go module **and** of the image. The release workflow builds the image,
 fails on fixable critical vulnerabilities (Trivy), pushes it to `ghcr.io` and creates the GitHub
 release. Proto changes are checked for breaking changes against the base branch (`buf breaking`).
+
+## Lizenzen
+
+Der Code dieses Repositories steht unter der MIT-Lizenz (`LICENSE`). Das Image enthält zusätzlich
+Fremdsoftware; die Lizenztexte liegen unter `/licenses`:
+
+- `/licenses/typst`: Typst (Apache-2.0) inkl. `NOTICE`; Typst bringt seine Standardschriften selbst mit.
+- `/licenses/go`: alle in das Binary gelinkten Go-Abhängigkeiten. Nach Änderungen an den
+  Abhängigkeiten neu erzeugen: `scripts/licenses.sh` (Ergebnis in `third_party/go-licenses` committen).
+- `/licenses/typst-renderer`: die MIT-Lizenz dieses Repositories.
+
+Abgeleitete Images (z. B. mit zusätzlichen Typst-Paketen unter `/packages`) müssen die Lizenzen der
+dort ergänzten Pakete selbst beilegen.
