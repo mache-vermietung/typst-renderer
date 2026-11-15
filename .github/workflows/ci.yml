@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: Build, test, lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      # Typst version and checksums come from build/typst.version and build/typst.sha256, the
+      # same files the Dockerfile uses.
+      - name: Install Typst
+        run: |
+          scripts/install-typst.sh "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test -race -count=1 ./...
+
+      - name: Generated code and go.mod are up to date
+        run: |
+          scripts/generate.sh
+          go mod tidy
+          git diff --exit-code
+
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.12.2
+
+  proto:
+    name: Protobuf lint and breaking changes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - uses: bufbuild/buf-action@37ac33d8960807670a6e9719080e885197b09cc6 # v1.7.0
+        with:
+          lint: true
+          format: false
+          breaking: ${{ github.event_name == 'pull_request' }}
+          pr_comment: false
+
+  image:
+    name: Image build and smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: typst-renderer:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Bundled Typst matches build/typst.version
+        run: |
+          want="$(tr -d '\r\n' < build/typst.version)"
+          got="$(docker run --rm --entrypoint /bin/typst typst-renderer:ci --version)"
+          echo "want typst $want, got: $got"
+          case "$got" in "typst $want "*) ;; *) echo "version mismatch" >&2; exit 1 ;; esac
+
+      - name: Runs hardened (non-root, read-only, no network) and reports healthy
+        run: |
+          docker run -d --name renderer --read-only --network none \
+            --tmpfs /tmp:rw,noexec,nosuid,size=256m typst-renderer:ci
+          for _ in $(seq 1 20); do
+            if docker exec renderer /bin/typst-renderer healthcheck; then exit 0; fi
+            sleep 1
+          done
+          docker logs renderer
+          exit 1

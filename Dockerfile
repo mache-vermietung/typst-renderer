@@ -46,8 +46,8 @@ USER nonroot:nonroot
 
 ENV RENDERER_LISTEN_ADDR=":9100" \
     TYPST_BINARY_PATH="/bin/typst" \
-    DOCUMENT_PACKAGE_PATH="/packages" \
-    DOCUMENT_FONT_PATH="/fonts"
+    RENDERER_PACKAGE_PATH="/packages" \
+    RENDERER_FONT_PATH="/fonts"
 
 EXPOSE 9100
 

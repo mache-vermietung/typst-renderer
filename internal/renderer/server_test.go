@@ -30,7 +30,6 @@ func testConfig() renderer.Config {
 		MaxConcurrency:    2,
 		MaxTimeoutSeconds: 5,
 		TypstBinaryPath:   "typst",
-		PackagePath:       "../document/packages",
 	}
 }
 

@@ -16,8 +16,9 @@ const (
 	DefaultMaxTimeoutSeconds = 20
 	// DefaultTypstBinaryPath is the default Typst binary path.
 	DefaultTypstBinaryPath = "typst"
-	// DefaultPackagePath is the default location of vendored Typst packages.
-	DefaultPackagePath = "internal/document/packages"
+	// DefaultPackagePath is the default location of vendored Typst packages. The base image ships
+	// it empty; derived images add the packages their templates import.
+	DefaultPackagePath = "/packages"
 )
 
 // Config configures the renderer gRPC service.
@@ -43,10 +44,7 @@ func LoadConfigFromEnv() Config {
 		typstBinary = DefaultTypstBinaryPath
 	}
 
-	fontPath := os.Getenv("DOCUMENT_FONT_PATH")
-	if fontPath == "" {
-		fontPath = os.Getenv("RENDERER_FONT_PATH")
-	}
+	fontPath := firstEnv("RENDERER_FONT_PATH", "DOCUMENT_FONT_PATH")
 
 	return Config{
 		ListenAddr:        listenAddr,
@@ -80,13 +78,21 @@ func parseEnvInt64(key string, defaultVal int64) int64 {
 }
 
 func resolvePackagePath() string {
-	if path := os.Getenv("DOCUMENT_PACKAGE_PATH"); path != "" {
-		return path
-	}
-
-	if path := os.Getenv("RENDERER_PACKAGE_PATH"); path != "" {
+	if path := firstEnv("RENDERER_PACKAGE_PATH", "DOCUMENT_PACKAGE_PATH"); path != "" {
 		return path
 	}
 
 	return DefaultPackagePath
+}
+
+// firstEnv returns the value of the first non-empty variable. The DOCUMENT_* names are accepted as
+// aliases of the RENDERER_* names for existing deployments.
+func firstEnv(keys ...string) string {
+	for _, key := range keys {
+		if val := os.Getenv(key); val != "" {
+			return val
+		}
+	}
+
+	return ""
 }

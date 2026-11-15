@@ -1,0 +1,85 @@
+version: "2"
+
+# Standard Go formatting with imports grouped as stdlib, third-party, local.
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/mache-vermietung/typst-renderer
+  exclusions:
+    paths:
+      - proto/renderer/v1/.*\.pb\.go
+
+linters:
+  default: standard
+
+  settings:
+    govet:
+      enable:
+        - shadow # Warnt, wenn Variablen in inneren Scopes äußere Variablen verdecken
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
+        - performance
+      disabled-checks:
+        # Conflicts with the doc-comment conventions enforced by revive/godoclint.
+        - docStub
+        # Value semantics are intentional (immutable domain value types, sqlc row structs).
+        - hugeParam
+        - rangeValCopy
+        # http.NoBody vs nil in tests is noise.
+        - httpNoBody
+        # Suggests `if err := ...` in places where govet shadow then reports the shadowed err.
+        - sloppyReassign
+        # Named results widen the function scope, so body declarations (err := ...) then clash with
+        # or get reported by govet shadow.
+        - unnamedResult
+
+  enable:
+    - contextcheck
+    - cyclop
+    - decorder
+    - dupl
+    - dupword
+    - errname
+    - errorlint
+    - err113
+    - exptostd
+    - forbidigo
+    - funcorder
+    - gocognit
+    - goconst
+    - gocritic
+    - gocyclo
+    - godoclint
+    - gosec
+    - govet
+    - iface
+    - maintidx
+    - makezero
+    - misspell
+    - modernize
+    - perfsprint
+    - prealloc
+    - revive
+    - sloglint
+    - spancheck
+    - unconvert
+    - usestdlibvars
+    - whitespace
+    - wsl_v5
+
+  exclusions:
+    rules:
+      - path: '(.+)_test\.go'
+        linters:
+          - cyclop
+          - gocognit
+          - goconst
+          - gocyclo
+          - maintidx
+
