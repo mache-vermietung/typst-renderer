@@ -1,0 +1,7 @@
+typst-renderer {{ include "typst-renderer.imageTag" . }} listens for gRPC on
+  {{ include "typst-renderer.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}
+{{- if not .Values.networkPolicy.enabled }}
+
+The renderer is meant to run without egress. Enable networkPolicy (and list the allowed clients in
+networkPolicy.ingress.from) unless the namespace is already isolated otherwise.
+{{- end }}

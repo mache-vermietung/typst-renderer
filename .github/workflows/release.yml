@@ -1,7 +1,7 @@
 name: Release
 
 # Tags are created on commits of main: vX.Y.Z (release) or vX.Y.Z-rc.N (pre-release). The Go
-# module version is the tag itself; the image carries the same tag.
+# module version is the tag itself; the image and the Helm chart carry the same version.
 on:
   push:
     tags: ["v*"]
@@ -70,6 +70,22 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
+
+      # Helm chart: same version as the image (tag vX.Y.Z -> chart X.Y.Z, appVersion vX.Y.Z), pushed
+      # next to the image as oci://ghcr.io/mache-vermietung/charts/typst-renderer.
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.3.1
+
+      - name: Package and push the Helm chart
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          helm lint charts/typst-renderer
+          helm package charts/typst-renderer --version "$version" --app-version "$GITHUB_REF_NAME" --destination dist
+          echo "$GH_TOKEN" | helm registry login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          helm push "dist/typst-renderer-$version.tgz" oci://ghcr.io/mache-vermietung/charts
 
       - name: GitHub release
         env:

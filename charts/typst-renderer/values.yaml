@@ -1,0 +1,95 @@
+# Default values for typst-renderer. See README.md for a description of every value.
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/mache-vermietung/typst-renderer
+  # Empty = .Chart.AppVersion (the release tag, e.g. "v1.0.1").
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+service:
+  type: ClusterIP
+  port: 9100
+
+# Daemon configuration (RENDERER_* environment variables).
+config:
+  # Without a value the daemon uses the number of CPUs it sees -- in Kubernetes that is the
+  # node's CPU count, not the pod's share. Keep it in line with the memory limit.
+  maxConcurrency: 2
+  maxRequestBytes: 20971520
+  maxTimeoutSeconds: 20
+  logLevel: info
+  logFormat: json
+
+# OTLP/HTTP export of traces and metrics. Empty endpoint = no export. The daemon has no
+# Prometheus endpoint; with networkPolicy.enabled, allow the collector in
+# networkPolicy.egress.extra.
+otel:
+  endpoint: ""
+  # Empty = the release's full name.
+  serviceName: ""
+
+env: {}
+extraEnv: []
+extraVolumes: []
+extraVolumeMounts: []
+
+# /tmp is the only writable path (in-memory emptyDir; counts against the memory limit).
+tmpSizeLimit: 256Mi
+
+probes:
+  # grpc.health.v1 service name checked by the readiness probe; the daemon reports
+  # NOT_SERVING while shutting down.
+  readinessService: renderer.v1.RendererService
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 512Mi
+  limits:
+    memory: 512Mi
+
+podSecurityContext: {}
+securityContext: {}
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podDisruptionBudget:
+  # Always created when replicaCount > 1.
+  enabled: false
+  maxUnavailable: 1
+
+networkPolicy:
+  enabled: false
+  ingress:
+    # NetworkPolicyPeer list allowed to reach the gRPC port. Empty = no ingress at all.
+    from: []
+  dns:
+    # Allow DNS egress (needed when otel.endpoint uses a hostname).
+    enabled: true
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: kube-system
+    podSelector:
+      matchLabels:
+        k8s-app: kube-dns
+  egress:
+    # Additional NetworkPolicyEgressRule objects (e.g. the OTLP collector).
+    extra: []
+
+terminationGracePeriodSeconds: 30
+priorityClassName: ""
+nodeSelector: {}
+affinity: {}
+tolerations: []
+topologySpreadConstraints: []
+podAnnotations: {}
+podLabels: {}

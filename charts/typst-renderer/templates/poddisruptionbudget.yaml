@@ -1,0 +1,13 @@
+{{- if or .Values.podDisruptionBudget.enabled (gt (int .Values.replicaCount) 1) }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "typst-renderer.fullname" . }}
+  labels:
+    {{- include "typst-renderer.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: {{ .Values.podDisruptionBudget.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- include "typst-renderer.selectorLabels" . | nindent 6 }}
+{{- end }}

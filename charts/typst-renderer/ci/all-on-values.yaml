@@ -1,0 +1,39 @@
+# CI: every optional resource enabled (helm lint/template, kubeconform).
+replicaCount: 2
+otel:
+  endpoint: http://otel-collector.monitoring:4318
+env:
+  EXTRA: "1"
+extraVolumes:
+  - name: packages
+    emptyDir: {}
+extraVolumeMounts:
+  - name: packages
+    mountPath: /packages
+    readOnly: true
+priorityClassName: system-cluster-critical
+podDisruptionBudget:
+  enabled: true
+networkPolicy:
+  enabled: true
+  ingress:
+    from:
+      - namespaceSelector:
+          matchLabels:
+            renderer-client: "true"
+  egress:
+    extra:
+      - to:
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: monitoring
+        ports:
+          - port: 4318
+            protocol: TCP
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: ScheduleAnyway
+    labelSelector:
+      matchLabels:
+        app.kubernetes.io/name: typst-renderer

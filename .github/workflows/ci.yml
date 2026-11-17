@@ -99,3 +99,63 @@ jobs:
           done
           docker logs renderer
           exit 1
+
+  chart:
+    name: Helm chart lint and install test
+    runs-on: ubuntu-latest
+    env:
+      CHART: charts/typst-renderer
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.3.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Lint and validate the rendered manifests
+        run: |
+          helm lint "$CHART"
+          helm lint "$CHART" -f "$CHART/ci/all-on-values.yaml"
+          for values in "" "-f $CHART/ci/all-on-values.yaml"; do
+            # shellcheck disable=SC2086
+            helm template t "$CHART" $values \
+              | go run github.com/yannh/kubeconform/cmd/kubeconform@v0.8.0 \
+                  -strict -summary
+          done
+
+      - name: Schema rejects unknown values
+        run: |
+          if helm template t "$CHART" --set networkPolicy.ingres.from=x >/dev/null 2>&1; then
+            echo "values.schema.json did not reject a misspelled key" >&2
+            exit 1
+          fi
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: typst-renderer:ci
+          cache-from: type=gha
+
+      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+        with:
+          cluster_name: chart-test
+
+      - name: Install the chart and check health
+        run: |
+          kind load docker-image typst-renderer:ci --name chart-test
+          helm install renderer "$CHART" --wait --timeout 3m \
+            --set image.repository=typst-renderer --set image.tag=ci --set image.pullPolicy=Never
+          kubectl exec deploy/renderer-typst-renderer -- /bin/typst-renderer healthcheck
+          kubectl get pods -o wide
+

@@ -7,6 +7,8 @@ needs no database, no secrets and no network. Clients send a bundle (template fi
 and get a PDF back.
 
 - **Image:** `ghcr.io/mache-vermietung/typst-renderer:<version>` (`linux/amd64`)
+- **Helm chart:** `oci://ghcr.io/mache-vermietung/charts/typst-renderer`, same version as the image
+  (see [charts/typst-renderer](./charts/typst-renderer/README.md))
 - **Go module:** `github.com/mache-vermietung/typst-renderer` — the gRPC client code lives in
   `proto/renderer/v1`
 - **License:** [MIT](./LICENSE)
@@ -164,8 +166,9 @@ The version lives in `build/typst.version`; the checksums of the release archive
 
 Tags are created on commits of `main`: `vX.Y.Z` for a release, `vX.Y.Z-rc.N` for a pre-release. The
 tag is the version of the Go module **and** of the image. The release workflow builds the image,
-fails on fixable critical vulnerabilities (Trivy), pushes it to `ghcr.io` and creates the GitHub
-release. Proto changes are checked for breaking changes against the base branch (`buf breaking`).
+fails on fixable critical vulnerabilities (Trivy), pushes it to `ghcr.io`, publishes the Helm chart
+with the same version (`oci://ghcr.io/mache-vermietung/charts/typst-renderer`, chart version = tag
+without `v`) and creates the GitHub release. Proto changes are checked for breaking changes against the base branch (`buf breaking`).
 
 ## Lizenzen
 

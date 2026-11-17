@@ -1,0 +1,128 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "typst-renderer.fullname" . }}
+  labels:
+    {{- include "typst-renderer.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "typst-renderer.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "typst-renderer.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "typst-renderer.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      securityContext:
+        {{- $podDefaults := dict "runAsNonRoot" true "runAsUser" 65532 "runAsGroup" 65532 "seccompProfile" (dict "type" "RuntimeDefault") }}
+        {{- toYaml (mergeOverwrite $podDefaults .Values.podSecurityContext) | nindent 8 }}
+      containers:
+        - name: typst-renderer
+          image: "{{ .Values.image.repository }}:{{ include "typst-renderer.imageTag" . }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- $defaults := dict "allowPrivilegeEscalation" false "readOnlyRootFilesystem" true "capabilities" (dict "drop" (list "ALL")) }}
+            {{- toYaml (mergeOverwrite $defaults .Values.securityContext) | nindent 12 }}
+          ports:
+            - name: grpc
+              containerPort: 9100
+              protocol: TCP
+          env:
+            - name: RENDERER_LISTEN_ADDR
+              value: ":9100"
+            {{- with .Values.config }}
+            {{- if .maxConcurrency }}
+            - name: RENDERER_MAX_CONCURRENCY
+              value: {{ .maxConcurrency | quote }}
+            {{- end }}
+            - name: RENDERER_MAX_REQUEST_BYTES
+              value: {{ .maxRequestBytes | int64 | quote }}
+            - name: RENDERER_MAX_TIMEOUT_SECONDS
+              value: {{ .maxTimeoutSeconds | quote }}
+            - name: LOG_LEVEL
+              value: {{ .logLevel | quote }}
+            - name: LOG_FORMAT
+              value: {{ .logFormat | quote }}
+            {{- end }}
+            {{- with .Values.otel.endpoint }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ . | quote }}
+            - name: OTEL_SERVICE_NAME
+              value: {{ default (include "typst-renderer.fullname" $) $.Values.otel.serviceName | quote }}
+            {{- end }}
+            {{- range $name, $value := .Values.env }}
+            - name: {{ $name }}
+              value: {{ $value | quote }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          startupProbe:
+            grpc:
+              port: 9100
+            periodSeconds: 2
+            failureThreshold: 30
+          readinessProbe:
+            grpc:
+              port: 9100
+              service: {{ .Values.probes.readinessService | quote }}
+            periodSeconds: 5
+            failureThreshold: 2
+          livenessProbe:
+            grpc:
+              port: 9100
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: {{ .Values.tmpSizeLimit }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

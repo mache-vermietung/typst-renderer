@@ -1,0 +1,16 @@
+apiVersion: v2
+name: typst-renderer
+description: Isolated Typst-to-PDF renderer daemon (gRPC, no network access required)
+type: application
+# Set by the release workflow from the tag (vX.Y.Z -> version X.Y.Z, appVersion vX.Y.Z).
+# The values here are only used for local rendering and CI.
+version: 0.0.0
+appVersion: "v1.0.1"
+kubeVersion: ">=1.30.0-0"
+home: https://github.com/mache-vermietung/typst-renderer
+sources:
+  - https://github.com/mache-vermietung/typst-renderer
+keywords:
+  - typst
+  - pdf
+  - grpc
